@@ -42,10 +42,10 @@ class ServiceConfig:
 
     Environment variables (set in .env or shell):
         APOLLO_API_KEY, PRODUCTHUNT_API_KEY,
-        PROXYCURL_API_KEY, CLEARBIT_API_KEY,
+        CLEARBIT_API_KEY,
         HUNTER_API_KEY,
         REDIS_URL,
-        ANTHROPIC_API_KEY / OPENAI_API_KEY (for the LLM)
+        OPENROUTER_API_KEY (for the LLM)
     """
 
     # ── Search APIs (Module 1) ─────────────────────────────────────────────
@@ -59,10 +59,6 @@ class ServiceConfig:
     ))
 
     # ── Enrich APIs (Module 2) ─────────────────────────────────────────────
-    proxycurl: APIConfig = field(default_factory=lambda: APIConfig(
-        api_key=os.environ.get("PROXYCURL_API_KEY", ""),
-        enabled=True,
-    ))
     clearbit: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("CLEARBIT_API_KEY", ""),
         enabled=True,
@@ -76,8 +72,8 @@ class ServiceConfig:
 
     # ── LLM ───────────────────────────────────────────────────────────────
     model: ModelConfig = field(default_factory=lambda: ModelConfig(
-        provider="anthropic",
-        model="claude-sonnet-4-6",
+        provider="openrouter",
+        model="openrouter/owl-alpha",
         max_tokens=4096,
         temperature=0.1,    # low temp: deterministic JSON extraction
     ))
@@ -104,8 +100,6 @@ class ServiceConfig:
 
     def enabled_enrich_apis(self) -> list[str]:
         apis = []
-        if self.proxycurl.is_ready():
-            apis.append("proxycurl")
         if self.clearbit.is_ready():
             apis.append("clearbit")
         return apis

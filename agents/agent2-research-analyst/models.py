@@ -36,7 +36,7 @@ class RawResearchData(BaseModel):
     # Website (keys = page slug: "homepage", "about", "services", etc.)
     website_pages: dict[str, str] = {}
 
-    # LinkedIn (ProxyCurl — raw markdown text of profiles)
+    # LinkedIn (PhantomBuster — raw markdown text of profiles)
     linkedin_person: Optional[str] = None
     linkedin_company: Optional[str] = None
 
@@ -45,7 +45,7 @@ class RawResearchData(BaseModel):
 
     # Social presence
     social_profiles: dict[str, Optional[str]] = {}   # platform → profile URL or None
-    social_posts: list[str] = []                      # recent LinkedIn post texts
+    social_posts: list[str] = []                      # recent public post texts
 
     # Which scrapers actually ran
     sources_attempted: list[str] = []

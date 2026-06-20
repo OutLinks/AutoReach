@@ -38,19 +38,8 @@ launched on Product Hunt
 product website, product description, launch date, upvote count, categories
 - **Prefer when**: Looking for early-stage startup founders, SaaS builders, \
 tech entrepreneurs — especially those who are active in the product/startup community
-- **Limitation**: Does not return email addresses directly; use ProxyCurl or \
-Clearbit to enrich maker profiles with contact data
-""",
-
-    "proxycurl": """\
-### PROXYCURL  [enrich]
-- **Used in**: Enrich phase (after search)
-- **Best for**: Deep LinkedIn profile enrichment for both people and companies
-- **Returns (person)**: Current + past experience, education, skills, connections, \
-personal email (when available), phone, profile photo, public posts
-- **Returns (company)**: Employee count, headquarters, specialties, funding rounds, \
-LinkedIn follower count, employee list samples
-- **Trigger**: Run when a lead has a `linkedin_url` or `company_linkedin_url`
+- **Limitation**: Does not return email addresses directly; use Clearbit to \
+enrich maker profiles with contact data
 """,
 
     "clearbit": """\
@@ -202,7 +191,7 @@ The following API services are currently enabled for this run:
 {api_guidance}
 - Only list APIs in `api_priorities` that appear in ACTIVE SERVICES above
 - If no search APIs are active, set `api_priorities` to an empty list
-- Enrich/verify APIs (ProxyCurl, Clearbit, Hunter) run automatically \
+- Enrich/verify APIs (Clearbit, Hunter) run automatically \
   after search — do not include them in `api_priorities`
 
 ---

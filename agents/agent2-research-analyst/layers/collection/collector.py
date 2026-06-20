@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
 from ...config import ServiceConfig
 from ...models import RawResearchData
@@ -52,7 +51,7 @@ class DataCollector:
             self._collect_person_linkedin(linkedin_url),
             self._collect_company_linkedin(company_linkedin),
             self._collect_news(company_name),
-            self._collect_social(twitter, github, linkedin_url),
+            self._collect_social(twitter, github),
             return_exceptions=True,
         )
 
@@ -73,7 +72,7 @@ class DataCollector:
         if (isinstance(li_person, str) and li_person) or (
             isinstance(li_company, str) and li_company
         ):
-            data.sources_succeeded.append("proxycurl")
+            data.sources_succeeded.append("phantombuster")
 
         if isinstance(news, list):
             data.news_articles = news
@@ -102,13 +101,13 @@ class DataCollector:
         return await self._website.scrape(url)
 
     async def _collect_person_linkedin(self, url: str) -> str:
-        if not url or not self._config.proxycurl.is_ready():
+        if not url or not self._config.phantombuster.is_ready():
             return ""
         result = await self._linkedin.fetch_person(url)
         return result or ""
 
     async def _collect_company_linkedin(self, url: str) -> str:
-        if not url or not self._config.proxycurl.is_ready():
+        if not url or not self._config.phantombuster.company_ready():
             return ""
         result = await self._linkedin.fetch_company(url)
         return result or ""
@@ -118,9 +117,6 @@ class DataCollector:
             return []
         return await self._news.search(company_name)
 
-    async def _collect_social(
-        self, twitter: str, github: str, linkedin_url: str
-    ) -> tuple[dict, list]:
+    async def _collect_social(self, twitter: str, github: str) -> tuple[dict, list]:
         profiles = await self._social.check_profiles(twitter or None, github or None)
-        posts = await self._social.fetch_recent_posts(linkedin_url or "")
-        return profiles, posts
+        return profiles, []

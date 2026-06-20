@@ -32,7 +32,9 @@ class PersonalProfileBuilder:
         company_name: str,
         data: RawResearchData,
     ) -> Optional[PersonalProfile]:
-        if not data.linkedin_person and not data.social_posts:
+        if not data.linkedin_person and not data.social_posts and not any(
+            data.social_profiles.values()
+        ):
             logger.debug(
                 "PersonalProfileBuilder: no personal data for %s, skipping", lead_name
             )

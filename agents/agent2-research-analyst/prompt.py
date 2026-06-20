@@ -33,7 +33,7 @@ def _build_data_context(data: RawResearchData) -> str:
 
     if data.social_posts:
         posts = "\n".join(f"- {p}" for p in data.social_posts[:10])
-        sections.append(f"## RECENT LINKEDIN POSTS\n{posts}")
+        sections.append(f"## RECENT POSTS\n{posts}")
 
     if not sections:
         return "## DATA\n(No data was collected for this lead.)"

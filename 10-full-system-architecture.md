@@ -361,7 +361,7 @@ OUTPUT: 50 verified leads in Airtable:
 
 ### LinkedIn Sales Navigator (Secondary)
 - Most up-to-date professional data
-- Use Proxycurl API or PhantomBuster
+- Use PhantomBuster (Proxycurl has shut down)
 - Returns: profile, experience, education, posts
 
 ### Google Custom Search (Supplementary)
@@ -378,7 +378,7 @@ OUTPUT: 50 verified leads in Airtable:
 | Field | Source | Why |
 |-------|--------|-----|
 | Website | Apollo / Google | For research |
-| LinkedIn | Apollo / Proxycurl | Personalization |
+| LinkedIn | Apollo | Personalization |
 | Company size | Apollo / LinkedIn | Qualification |
 | Technologies | BuiltWith | Pain point inference |
 | Recent news | Google News | Email personalization |
@@ -423,7 +423,6 @@ Check before adding:
 | Apollo.io | 50 exports | $49/mo |
 | Hunter.io | 25 verifies | $49/mo |
 | BuiltWith | None | $295/mo |
-| Proxycurl | None | $0.01/profile |
 | Firecrawl | 500 pages | $29/mo |
 
 **Minimum: $0/month | Recommended: ~$100-150/month**

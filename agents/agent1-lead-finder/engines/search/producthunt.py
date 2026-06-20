@@ -2,7 +2,7 @@
 ProductHunt search adapter.
 
 Queries the ProductHunt GraphQL API to find startup makers matching the
-search criteria. Returns leads with limited contact info — ProxyCurl/Clearbit
+search criteria. Returns leads with limited contact info — Clearbit
 enrichment fills in emails and company data downstream.
 
 API docs: https://api.producthunt.com/v2/docs
