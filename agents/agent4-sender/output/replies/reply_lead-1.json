@@ -1,0 +1,9 @@
+{
+  "lead_id": "lead-1",
+  "sent_email_id": "c75e0b27-36ab-402f-92f0-28d4145cef71",
+  "email_id": "email-lead-1",
+  "message_id": "<67b568a2574e4d12963f2da11ebfdd48@smtp.simulated>",
+  "recipient": "jane@acme.com",
+  "snippet": "Sure, send me a time",
+  "detected_at": "2026-06-20T05:55:29.087143"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "18312ce3-8b8a-48cb-a846-82a017b52ac8",
+  "kind": "handoff",
+  "lead_id": "lead-3",
+  "title": "Human review needed: lead lead-3",
+  "message": "Jane at Acme replied with intent ANGRY (negative sentiment, medium urgency). Lead score 5.0, 0 prior exchanges.\nReason: negative sentiment",
+  "urgency": "medium",
+  "created_at": "2026-06-20T06:12:14.297886"
+}
