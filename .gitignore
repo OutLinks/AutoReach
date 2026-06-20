@@ -1,0 +1,16 @@
+# Secrets — never commit real keys. Templates (.env.example) ARE tracked.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime artifacts (keep the output/ dirs via their .gitkeep)
+*.db
+output/*.jsonl
+output/replies/
+output/signals/
