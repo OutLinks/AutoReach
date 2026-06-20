@@ -10,3 +10,9 @@ pydantic>=2.0.0
 
 # Redis async client — pipeline message bus between engines
 redis[asyncio]>=5.0.0
+
+# Agent 2: web scraping and news search
+firecrawl-py>=0.0.16
+serpapi>=0.1.5
+
+# Agent 3: email DB (sqlite3 is stdlib — no extra install needed)
