@@ -45,7 +45,8 @@ class ServiceConfig:
         CLEARBIT_API_KEY,
         HUNTER_API_KEY,
         REDIS_URL,
-        OPENROUTER_API_KEY (for the LLM)
+        LLM_PROVIDER, LLM_MODEL (select the LLM; default anthropic),
+        ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY (for the LLM)
     """
 
     # ── Search APIs (Module 1) ─────────────────────────────────────────────
@@ -71,9 +72,14 @@ class ServiceConfig:
     ))
 
     # ── LLM ───────────────────────────────────────────────────────────────
+    # Defaults to anthropic / claude-sonnet-4-6. Override the provider and model
+    # purely via env vars — e.g. to test with OpenRouter's owl-alpha:
+    #     LLM_PROVIDER=openrouter
+    #     LLM_MODEL=openrouter/owl-alpha
+    #     OPENROUTER_API_KEY=...
     model: ModelConfig = field(default_factory=lambda: ModelConfig(
-        provider="openrouter",
-        model="openrouter/owl-alpha",
+        provider=os.environ.get("LLM_PROVIDER", "anthropic"),
+        model=os.environ.get("LLM_MODEL", "claude-sonnet-4-6"),
         max_tokens=4096,
         temperature=0.1,    # low temp: deterministic JSON extraction
     ))
