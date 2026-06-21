@@ -31,7 +31,7 @@ from .engines.search.engine import SearchEngine
 from .engines.verify.engine import VerifyEngine
 from .models import SearchCriteria, SearchJob
 from .prompt import build_system_prompt
-from .storage import DBWriter, RedisStore
+from .storage import RedisStore, make_writer
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class LeadFinderAgent:
         self._enrich = EnrichEngine(self._config, self._store)
         self._score_dedupe = ScoreDedupeEngine(self._config, self._store)
 
-        self._db_writer = DBWriter()
+        self._db_writer = make_writer(self._config)
         self._adapter = get_model(self._config.model)
 
     # ── Public API ────────────────────────────────────────────────────────────

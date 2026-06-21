@@ -45,6 +45,18 @@ class SnovConfig:
 
 
 @dataclass
+class SupabaseConfig:
+    """Supabase project URL + API key for persisting final leads."""
+
+    url: str = ""
+    key: str = ""
+    table: str = "leads"
+
+    def is_ready(self) -> bool:
+        return bool(self.url.strip()) and bool(self.key.strip())
+
+
+@dataclass
 class ServiceConfig:
     """
     Master configuration for Agent 1.
@@ -112,6 +124,16 @@ class ServiceConfig:
         default_factory=lambda: os.environ.get("REDIS_URL", "redis://localhost:6379")
     )
     redis_ttl: int = 86400          # 24 h — how long job data stays in Redis
+
+    # ── Final output: Supabase (falls back to local JSONL when unset) ──────
+    supabase: SupabaseConfig = field(default_factory=lambda: SupabaseConfig(
+        url=os.environ.get("SUPABASE_URL", ""),
+        # Prefer a server-side secret key (bypasses row-level security).
+        key=os.environ.get("SUPABASE_SECRET_KEY", "")
+            or os.environ.get("SUPABASE_SERVICE_KEY", "")
+            or os.environ.get("SUPABASE_KEY", ""),
+        table=os.environ.get("SUPABASE_LEADS_TABLE", "leads"),
+    ))
 
     # ── Helpers ────────────────────────────────────────────────────────────
 

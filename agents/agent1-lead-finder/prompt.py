@@ -124,7 +124,11 @@ businesses, not startups. ProductHunt would only surface tech founders."
 
 **Field rules**:
 - `industries`: normalised industry labels (lowercase, plural)
-- `company_sizes`: use ranges "1-10", "11-50", "51-200", "201-500", "500+"
+- `company_sizes`: use ranges "1-10", "11-50", "51-200", "201-500", "500+". \
+  **Always infer this from qualitative wording** — "small business" / "small \
+  company" / "indie" → ["1-10", "11-50"]; "mid-size" / "SMB" → ["51-200", \
+  "201-500"]; "enterprise" / "large" → ["500+"]. Leave empty only when size is \
+  genuinely unspecified.
 - `locations`: city names, metro areas, or country names; be specific
 - `job_titles`: exact title keywords to match (lowercase)
 - `technologies`: only populate if the prompt mentions specific tech
