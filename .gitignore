@@ -14,3 +14,4 @@ venv/
 output/*.jsonl
 output/replies/
 output/signals/
+agents/agent1-lead-finder/output

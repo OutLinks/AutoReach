@@ -15,12 +15,15 @@ Wire format:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any
 
 from ..base import ProviderAdapter
 from ..registry import register_provider
 from ..types import Message, ModelConfig, ModelResponse, ToolCall, ToolDefinition, Usage
+
+logger = logging.getLogger(__name__)
 
 _FINISH_REASON_MAP: dict[str, str] = {
     "stop": "stop",
@@ -122,7 +125,17 @@ class ChatCompletionsAdapter(ProviderAdapter):
         return kwargs
 
     def normalize_response(self, raw: Any) -> ModelResponse:
-        choice = raw.choices[0]
+        # Some OpenAI-compatible backends (e.g. OpenRouter stealth models) can
+        # return HTTP 200 with no choices — an error payload or a transient
+        # empty completion. Degrade gracefully instead of crashing so callers
+        # can apply their own fallback.
+        choices = getattr(raw, "choices", None)
+        if not choices:
+            err = getattr(raw, "error", None)
+            logger.warning("Model returned no choices (error=%r) — empty response", err)
+            return ModelResponse(content=None, tool_calls=None, finish_reason="stop")
+
+        choice = choices[0]
         msg = choice.message
 
         content: str | None = msg.content

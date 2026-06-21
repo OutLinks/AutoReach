@@ -73,7 +73,13 @@ class ApolloAdapter:
                     resp = await client.post(
                         _SEARCH_URL,
                         json=payload,
-                        headers={"Content-Type": "application/json"},
+                        headers={
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                            # Apollo authenticates via the X-Api-Key header.
+                            # (Passing the key in the body is deprecated.)
+                            "X-Api-Key": self._api_key,
+                        },
                     )
                     resp.raise_for_status()
                     data = resp.json()
@@ -107,8 +113,8 @@ class ApolloAdapter:
 
     def _build_payload(self, criteria: SearchCriteria, page: int,
                        per_page: int) -> dict[str, Any]:
+        # NOTE: the key is sent via the X-Api-Key header, not the body.
         payload: dict[str, Any] = {
-            "api_key": self._api_key,
             "page": page,
             "per_page": per_page,
         }
@@ -120,15 +126,14 @@ class ApolloAdapter:
             # Apollo expects full location strings e.g. "San Francisco, California, United States"
             payload["person_locations"] = criteria.locations
 
-        if criteria.industries:
-            payload["organization_industry_tag_ids"] = []   # filled via org name filter
-            payload["q_organization_industry_in"] = criteria.industries
-
-        if criteria.keywords:
-            payload["q_keywords"] = " ".join(criteria.keywords)
+        # Apollo People Search has no industry-name filter, so fold any
+        # industries into the free-text keyword query alongside criteria.keywords.
+        keyword_terms = [*(criteria.keywords or []), *(criteria.industries or [])]
+        if keyword_terms:
+            payload["q_keywords"] = " ".join(keyword_terms)
 
         # Always filter to leads with a known email
-        payload["contact_email_status_in"] = ["verified", "guessed", "unverified"]
+        payload["contact_email_status"] = ["verified", "guessed", "unverified"]
 
         return payload
 
