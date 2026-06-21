@@ -33,6 +33,18 @@ class APIConfig:
 
 
 @dataclass
+class SnovConfig:
+    """Snov.io uses OAuth client credentials (User ID + Secret), not a single key."""
+
+    user_id: str = ""
+    secret: str = ""
+    enabled: bool = True
+
+    def is_ready(self) -> bool:
+        return self.enabled and bool(self.user_id.strip()) and bool(self.secret.strip())
+
+
+@dataclass
 class ServiceConfig:
     """
     Master configuration for Agent 1.
@@ -42,8 +54,8 @@ class ServiceConfig:
 
     Environment variables (set in .env or shell):
         APOLLO_API_KEY, PRODUCTHUNT_API_KEY,
+        HUNTER_API_KEY (search + verify), SNOV_USER_ID + SNOV_SECRET,
         CLEARBIT_API_KEY,
-        HUNTER_API_KEY,
         REDIS_URL,
         LLM_PROVIDER, LLM_MODEL (select the LLM; default anthropic),
         ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY (for the LLM)
@@ -56,6 +68,13 @@ class ServiceConfig:
     ))
     producthunt: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("PRODUCTHUNT_API_KEY", ""),
+        enabled=True,
+    ))
+    # Snov.io — domain-scoped prospect search (needs seed domains from other
+    # search sources). OAuth client credentials.
+    snov: SnovConfig = field(default_factory=lambda: SnovConfig(
+        user_id=os.environ.get("SNOV_USER_ID", ""),
+        secret=os.environ.get("SNOV_SECRET", ""),
         enabled=True,
     ))
 
@@ -102,6 +121,12 @@ class ServiceConfig:
             apis.append("apollo")
         if self.producthunt.is_ready():
             apis.append("producthunt")
+        # Hunter doubles as a search source (Discover + Domain Search) using the
+        # same HUNTER_API_KEY it uses for email verification.
+        if self.hunter.is_ready():
+            apis.append("hunter")
+        if self.snov.is_ready():
+            apis.append("snov")
         return apis
 
     def enabled_enrich_apis(self) -> list[str]:

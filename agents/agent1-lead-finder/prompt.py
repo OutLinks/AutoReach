@@ -54,13 +54,29 @@ employment history, location
 """,
 
     "hunter": """\
-### HUNTER.IO  [verify]
-- **Used in**: Verification phase
-- **Best for**: Email deliverability verification — confirms if an address is \
-safe to send to before spending API credits on enrichment
-- **Returns**: Status (valid/invalid/catch-all/unknown), confidence score (0–100), \
-disposable/webmail detection, MX record check, SMTP check
-- **Rule**: Email score < 50 → mark as invalid, skip enrichment for that lead
+### HUNTER.IO  [search + verify]
+- **Best for (search)**: Discovering companies by industry/keywords/technology/\
+location, then pulling named work emails for each — great when you need real \
+email addresses, not just profiles
+- **Returns (search)**: Full name, work email, position, department, confidence \
+score, company domain/name
+- **Also used in**: the Verification phase (same key) to confirm email \
+deliverability — status (valid/invalid/catch-all/unknown), confidence 0–100, \
+disposable/webmail detection, MX + SMTP checks
+- **Prefer when**: the prompt asks for contactable leads with emails in a given \
+industry or using a given technology
+""",
+
+    "snov": """\
+### SNOV.IO  [search]
+- **Best for**: Finding additional decision-makers at companies already \
+surfaced by other sources — it searches *within a company domain*, optionally \
+filtered by job title
+- **Coverage**: Prospects at the domains discovered by Apollo / ProductHunt / Hunter
+- **Returns**: Full name, position, LinkedIn URL, company domain (emails are \
+resolved later in enrichment)
+- **Prefer when**: you want to widen coverage of contacts per company; it runs \
+automatically after the discovery sources and needs no separate targeting
 """,
 }
 
@@ -133,7 +149,8 @@ def build_system_prompt(config: ServiceConfig) -> str:
     enrich_apis = config.enabled_enrich_apis()
     verify_apis = config.enabled_verify_apis()
 
-    all_active = search_apis + enrich_apis + verify_apis
+    # Dedupe while preserving order — Hunter appears in both search and verify.
+    all_active = list(dict.fromkeys(search_apis + enrich_apis + verify_apis))
 
     # Build the active-services block
     if all_active:
@@ -150,18 +167,23 @@ def build_system_prompt(config: ServiceConfig) -> str:
 
     # Build API selection guidance based on what's actually available
     api_guidance_lines: list[str] = []
-    if "apollo" in search_apis and "producthunt" in search_apis:
+    if "apollo" in search_apis:
         api_guidance_lines.append(
-            "- Use **Apollo** first for established B2B businesses; "
-            "add **ProductHunt** when the prompt mentions startups, founders, or tech"
+            "- **Apollo** — best for established B2B businesses and decision-makers by title"
         )
-    elif "apollo" in search_apis:
+    if "producthunt" in search_apis:
         api_guidance_lines.append(
-            "- **Apollo** is the only active search API — use it for all searches"
+            "- **ProductHunt** — best for startup founders and indie tech makers"
         )
-    elif "producthunt" in search_apis:
+    if "hunter" in search_apis:
         api_guidance_lines.append(
-            "- **ProductHunt** is the only active search API — best for tech founders"
+            "- **Hunter** — discovers companies by industry/keywords/technology and "
+            "returns named work emails; prefer when you need contactable leads"
+        )
+    if "snov" in search_apis:
+        api_guidance_lines.append(
+            "- **Snov** — runs automatically after the others to find more contacts "
+            "at the companies they surface; widens per-company coverage"
         )
 
     if not search_apis:
@@ -189,10 +211,12 @@ The following API services are currently enabled for this run:
 ## API SELECTION RULES
 
 {api_guidance}
-- Only list APIs in `api_priorities` that appear in ACTIVE SERVICES above
+- Only list search APIs in `api_priorities` that appear in ACTIVE SERVICES above
 - If no search APIs are active, set `api_priorities` to an empty list
-- Enrich/verify APIs (Clearbit, Hunter) run automatically \
-  after search — do not include them in `api_priorities`
+- **Snov** runs automatically after the discovery sources — you may include it, \
+  but it only works alongside at least one other search API
+- Pure enrich/verify APIs (Clearbit) run automatically after search — do not \
+  include them in `api_priorities`
 
 ---
 
