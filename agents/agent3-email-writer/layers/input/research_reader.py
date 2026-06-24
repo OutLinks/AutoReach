@@ -14,16 +14,9 @@ from typing import Any, Generator, Optional
 
 logger = logging.getLogger(__name__)
 
-_AGENT2_OUTPUT_DIR = (
-    Path(__file__).parent.parent.parent.parent.parent
-    / "agent2-research-analyst"
-    / "output"
-)
-_AGENT1_OUTPUT_DIR = (
-    Path(__file__).parent.parent.parent.parent.parent
-    / "agent1-lead-finder"
-    / "output"
-)
+_AGENTS_DIR = Path(__file__).resolve().parents[3]
+_AGENT2_OUTPUT_DIR = _AGENTS_DIR / "agent2-research-analyst" / "output"
+_AGENT1_OUTPUT_DIR = _AGENTS_DIR / "agent1-lead-finder" / "output"
 
 
 class ResearchReader:

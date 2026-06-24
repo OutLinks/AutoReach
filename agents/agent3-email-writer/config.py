@@ -15,6 +15,21 @@ from core.model_selection.types import ModelConfig
 
 
 @dataclass
+class SupabaseConfig:
+    url: str = field(default_factory=lambda: os.getenv("SUPABASE_URL", ""))
+    key: str = field(default_factory=lambda: os.getenv("SUPABASE_SERVICE_KEY", ""))
+    emails_table: str = field(
+        default_factory=lambda: os.getenv("SUPABASE_EMAILS_TABLE", "emails")
+    )
+    jobs_table: str = field(
+        default_factory=lambda: os.getenv("SUPABASE_EMAIL_JOBS_TABLE", "email_jobs")
+    )
+
+    def is_ready(self) -> bool:
+        return bool(self.url and self.key)
+
+
+@dataclass
 class ServiceConfig:
     # Model
     model: ModelConfig = field(
@@ -32,6 +47,7 @@ class ServiceConfig:
             Path(__file__).parent / "output" / "emails.db"
         )
     )
+    supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
 
     # Concurrency
     concurrency: int = 5

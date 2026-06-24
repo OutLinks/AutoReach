@@ -51,7 +51,7 @@ class EmailWriterAgent:
         self._assembler = InputAssembler(brand_voice, sender)
         self._writing = WritingLayer(config)
         self._quality = QualityLayer(config)
-        self._db = EmailDatabase(config.db_path)
+        self._db = EmailDatabase(config.db_path, config.supabase)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 

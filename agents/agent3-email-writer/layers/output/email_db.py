@@ -1,5 +1,6 @@
 """
-Email database — SQLite-backed relational store for WrittenEmail records.
+Email database — SQLite-backed relational store for WrittenEmail records,
+with optional Supabase dual-write when configured.
 
 Schema:
   emails        — one row per written email, FK to lead_id + research_profile_id
@@ -17,8 +18,12 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
+import httpx
+
+if TYPE_CHECKING:
+    from ...config import SupabaseConfig
 from ...models import EmailJob, QualityReport, WrittenEmail
 
 logger = logging.getLogger(__name__)
@@ -69,14 +74,67 @@ _CREATE_INDEXES = [
 ]
 
 
+class SupabaseEmailStore:
+    def __init__(self, config: "SupabaseConfig") -> None:
+        self._url = config.url.rstrip("/")
+        self._key = config.key
+        self._emails_table = config.emails_table
+        self._jobs_table = config.jobs_table
+
+    def upsert_job(self, job: EmailJob) -> None:
+        self._upsert(self._jobs_table, "id", [_job_to_supabase_record(job)])
+
+    def upsert_email(self, email: WrittenEmail) -> None:
+        self._upsert(self._emails_table, "id", [_email_to_supabase_record(email)])
+
+    def _upsert(self, table: str, conflict_column: str, records: list[dict]) -> None:
+        endpoint = f"{self._url}/rest/v1/{table}"
+        headers = {
+            "apikey": self._key,
+            "Authorization": f"Bearer {self._key}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates,return=minimal",
+        }
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(
+                    endpoint,
+                    params={"on_conflict": conflict_column},
+                    headers=headers,
+                    json=records,
+                )
+                resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:500]
+            raise RuntimeError(
+                f"Supabase write failed for table {table} "
+                f"(HTTP {exc.response.status_code}): {detail}"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                f"Supabase write failed for table {table}: {exc}"
+            ) from exc
+
+
 class EmailDatabase:
-    def __init__(self, db_path: str) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        supabase: Optional["SupabaseConfig"] = None,
+    ) -> None:
         self._path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._initialize()
+        self._supabase = (
+            SupabaseEmailStore(supabase)
+            if supabase and supabase.is_ready()
+            else None
+        )
         logger.info("EmailDatabase: opened at %s", db_path)
+        if self._supabase:
+            logger.info("EmailDatabase: Supabase dual-write enabled")
 
     # ── Schema ─────────────────────────────────────────────────────────────────
 
@@ -129,6 +187,8 @@ class EmailDatabase:
                     email.created_at.isoformat(),
                 ),
             )
+        if self._supabase:
+            self._supabase.upsert_email(email)
 
     def get_email(self, email_id: str) -> Optional[dict]:
         row = self._conn.execute(
@@ -191,6 +251,51 @@ class EmailDatabase:
                     job.completed_at.isoformat() if job.completed_at else None,
                 ),
             )
+        if self._supabase:
+            self._supabase.upsert_job(job)
 
     def close(self) -> None:
         self._conn.close()
+
+
+def _email_to_supabase_record(email: WrittenEmail) -> dict[str, Any]:
+    return {
+        "id": email.id,
+        "lead_id": email.lead_id,
+        "research_profile_id": email.research_profile_id or None,
+        "subject": email.subject,
+        "body": email.body,
+        "hook": email.hook,
+        "cta": email.cta,
+        "lead_first_name": email.lead_first_name,
+        "lead_last_name": email.lead_last_name,
+        "lead_company": email.lead_company,
+        "sender_name": email.sender_name,
+        "sender_email": email.sender_email,
+        "tone": email.tone,
+        "template_name": email.template_name,
+        "quality_score": email.quality_score,
+        "quality_passed": email.quality_passed,
+        "quality_report": (
+            email.quality_report.model_dump(mode="json")
+            if email.quality_report
+            else {}
+        ),
+        "status": email.status,
+        "job_id": email.job_id or None,
+        "created_at": email.created_at.isoformat(),
+    }
+
+
+def _job_to_supabase_record(job: EmailJob) -> dict[str, Any]:
+    return {
+        "id": job.id,
+        "status": job.status,
+        "total": job.total,
+        "written": job.written,
+        "quality_passed": job.quality_passed,
+        "quality_failed": job.quality_failed,
+        "skipped": job.skipped,
+        "created_at": job.created_at.isoformat(),
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+    }
