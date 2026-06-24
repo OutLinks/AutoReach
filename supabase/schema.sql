@@ -4,7 +4,7 @@
 -- The app should use the service-role key from server-side code only.
 
 create table if not exists public.leads (
-    id text primary key,
+    id uuid primary key,
     job_id text,
 
     first_name text,
@@ -62,8 +62,8 @@ create index if not exists idx_leads_grade on public.leads (lead_grade);
 create index if not exists idx_leads_job_id on public.leads (job_id);
 
 create table if not exists public.research_profiles (
-    id text primary key,
-    lead_id text not null references public.leads(id) on delete cascade,
+    id uuid primary key,
+    lead_id uuid not null references public.leads(id) on delete cascade,
     job_id text,
     status text,
     quality_score jsonb default '{}'::jsonb,
@@ -76,9 +76,9 @@ create index if not exists idx_research_profiles_lead_id on public.research_prof
 create index if not exists idx_research_profiles_job_id on public.research_profiles (job_id);
 
 create table if not exists public.emails (
-    id text primary key,
-    lead_id text not null references public.leads(id) on delete cascade,
-    research_profile_id text references public.research_profiles(id) on delete set null,
+    id uuid primary key,
+    lead_id uuid not null references public.leads(id) on delete cascade,
+    research_profile_id uuid references public.research_profiles(id) on delete set null,
 
     subject text not null,
     body text not null,
@@ -107,7 +107,7 @@ create index if not exists idx_emails_job_id on public.emails (job_id);
 create index if not exists idx_emails_status on public.emails (status);
 
 create table if not exists public.email_jobs (
-    id text primary key,
+    id uuid primary key,
     status text,
     total integer default 0,
     written integer default 0,
@@ -119,9 +119,9 @@ create table if not exists public.email_jobs (
 );
 
 create table if not exists public.sent_emails (
-    id text primary key,
-    email_id text not null references public.emails(id) on delete cascade,
-    lead_id text not null references public.leads(id) on delete cascade,
+    id uuid primary key,
+    email_id uuid not null references public.emails(id) on delete cascade,
+    lead_id uuid not null references public.leads(id) on delete cascade,
     step text,
     recipient text,
     account_email text,
@@ -146,9 +146,9 @@ create index if not exists idx_sent_emails_status on public.sent_emails (status)
 create index if not exists idx_sent_emails_message_id on public.sent_emails (message_id);
 
 create table if not exists public.tracking_events (
-    id text primary key,
-    sent_email_id text not null references public.sent_emails(id) on delete cascade,
-    lead_id text references public.leads(id) on delete set null,
+    id uuid primary key,
+    sent_email_id uuid not null references public.sent_emails(id) on delete cascade,
+    lead_id uuid references public.leads(id) on delete set null,
     event_type text not null,
     detail text,
     bounce_type text,
@@ -161,8 +161,8 @@ create index if not exists idx_tracking_events_lead_id on public.tracking_events
 create index if not exists idx_tracking_events_type on public.tracking_events (event_type);
 
 create table if not exists public.sequence_states (
-    lead_id text primary key references public.leads(id) on delete cascade,
-    email_id text references public.emails(id) on delete set null,
+    lead_id uuid primary key references public.leads(id) on delete cascade,
+    email_id uuid references public.emails(id) on delete set null,
     current_step text,
     status text,
     steps_sent jsonb default '[]'::jsonb,
@@ -200,7 +200,7 @@ create table if not exists public.suppression_list (
 );
 
 create table if not exists public.send_jobs (
-    id text primary key,
+    id uuid primary key,
     kind text,
     status text,
     total integer default 0,
@@ -213,8 +213,8 @@ create table if not exists public.send_jobs (
 );
 
 create table if not exists public.conversations (
-    id text primary key,
-    lead_id text references public.leads(id) on delete cascade,
+    id uuid primary key,
+    lead_id uuid references public.leads(id) on delete cascade,
     recipient text,
     status text default 'active',
     message_count integer default 0,
@@ -229,9 +229,9 @@ create index if not exists idx_conversations_lead_id on public.conversations (le
 create index if not exists idx_conversations_status on public.conversations (status);
 
 create table if not exists public.messages (
-    id text primary key,
-    conversation_id text references public.conversations(id) on delete cascade,
-    lead_id text references public.leads(id) on delete cascade,
+    id uuid primary key,
+    conversation_id uuid references public.conversations(id) on delete cascade,
+    lead_id uuid references public.leads(id) on delete cascade,
     direction text,
     body text,
     message_id text,
@@ -247,7 +247,7 @@ create index if not exists idx_messages_message_id on public.messages (message_i
 
 create table if not exists public.handoffs (
     id text primary key,
-    lead_id text references public.leads(id) on delete cascade,
+    lead_id uuid references public.leads(id) on delete cascade,
     reason text,
     urgency text,
     summary text,
@@ -259,9 +259,9 @@ create table if not exists public.handoffs (
 create index if not exists idx_handoffs_lead_id on public.handoffs (lead_id);
 
 create table if not exists public.notifications (
-    id text primary key,
+    id uuid primary key,
     kind text,
-    lead_id text references public.leads(id) on delete cascade,
+    lead_id uuid references public.leads(id) on delete cascade,
     title text,
     message text,
     urgency text,
@@ -272,7 +272,7 @@ create index if not exists idx_notifications_lead_id on public.notifications (le
 create index if not exists idx_notifications_created_at on public.notifications (created_at);
 
 create table if not exists public.reply_jobs (
-    id text primary key,
+    id uuid primary key,
     status text,
     total integer default 0,
     handled integer default 0,
