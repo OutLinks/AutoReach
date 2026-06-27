@@ -1,0 +1,94 @@
+# autoreach — full stack.
+#
+#   docker compose up --build orchestrator     # run the whole pipeline + redis
+#   docker compose run --rm agent1 "find SaaS founders in NYC"   # one agent
+#   docker compose --profile agents up         # bring up every agent service too
+#
+# All services share one image (built once) and the same output volumes, so the
+# JSONL hand-off files are visible whether a stage runs via the orchestrator or
+# as a standalone agent container. Secrets come from .env at runtime.
+
+# Shared building blocks (YAML anchors) reused by every service.
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: autoreach:latest
+  env_file:
+    - .env
+  environment:
+    # Point Agent 1's message bus at the redis service (overrides localhost).
+    REDIS_URL: redis://redis:6379
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+  # Every service mounts every output volume so the pipeline state is shared.
+  volumes:
+    - a1out:/app/agents/agent1-lead-finder/output
+    - a2out:/app/agents/agent2-research-analyst/output
+    - a3out:/app/agents/agent3-email-writer/output
+    - a4out:/app/agents/agent4-sender/output
+    - a5out:/app/agents/agent5-reply-handler/output
+    - orchout:/app/orchestrator/output
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # The CEO process — drives all 5 agents in-process through the state machine.
+  orchestrator:
+    <<: *app
+    command: ["orchestrator"]
+
+  # ── Standalone agents (profile: agents) ──────────────────────────────────
+  # Not started by default. Run on demand for debugging a single stage:
+  #   docker compose run --rm agent1 "<search prompt>"
+  # or start them all with:  docker compose --profile agents up
+  agent1:
+    <<: *app
+    command: ["agent1"]
+    restart: "no"
+    profiles: ["agents"]
+
+  agent2:
+    <<: *app
+    command: ["agent2"]
+    restart: "no"
+    profiles: ["agents"]
+
+  agent3:
+    <<: *app
+    command: ["agent3"]
+    restart: "no"
+    profiles: ["agents"]
+
+  agent4:
+    <<: *app
+    command: ["agent4"]
+    restart: "no"
+    profiles: ["agents"]
+
+  agent5:
+    <<: *app
+    command: ["agent5"]
+    restart: "no"
+    profiles: ["agents"]
+
+volumes:
+  redisdata:
+  a1out:
+  a2out:
+  a3out:
+  a4out:
+  a5out:
+  orchout:

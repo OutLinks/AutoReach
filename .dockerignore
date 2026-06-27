@@ -1,0 +1,25 @@
+# Keep the build context small and never bake secrets / local state into images.
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+
+# Secrets — provided at runtime via env_file, never copied into the image.
+.env
+.env.*
+!.env.example
+
+# Local runtime artifacts — recreated in volumes at runtime.
+*.db
+**/output/*.jsonl
+**/output/replies/
+**/output/signals/
+agents/agent1-lead-finder/output
+
+# Docs / editor noise
+.context
+*.md
+.DS_Store
