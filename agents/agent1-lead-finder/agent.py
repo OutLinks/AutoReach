@@ -8,8 +8,8 @@ Pipeline:
   prompt → [LLM] → SearchCriteria
          → SearchEngine   → raw leads in Redis
          → ScoreDedupeEngine.dedupe()  → unique leads in Redis
-         → VerifyEngine   → verified leads in Redis
          → EnrichEngine   → enriched leads in Redis
+         → VerifyEngine   → verified leads in Redis
          → ScoreDedupeEngine.score()   → scored leads in Redis
          → DBWriter       → final output file / database
 """
@@ -42,7 +42,7 @@ class LeadFinderAgent:
 
     Usage:
         config = ServiceConfig()
-        config.apollo.enabled = False  # turn off Apollo for this run
+        config.google_places.enabled = False  # turn off Google Places for this run
 
         agent = LeadFinderAgent(config)
         job = await agent.run("Find 50 real estate founders in San Francisco")
@@ -104,27 +104,27 @@ class LeadFinderAgent:
             job.total_unique = len(unique_leads)
             await self._store.save_job(job)
 
-            # ── Phase 4: Verify emails + websites ───────────────────────────
-            logger.info("[%s] Phase 4: verifying %d leads", job_id[:8], len(unique_leads))
-            job.status = "verifying"
-            await self._store.save_job(job)
-            verified_leads = await self._verify.run(unique_leads, job_id)
-            job.total_verified = len(verified_leads)
-            await self._store.save_job(job)
-
-            # ── Phase 5: Enrich ──────────────────────────────────────────────
-            logger.info("[%s] Phase 5: enriching %d leads", job_id[:8], len(verified_leads))
+            # ── Phase 4: Enrich ──────────────────────────────────────────────
+            logger.info("[%s] Phase 4: enriching %d leads", job_id[:8], len(unique_leads))
             job.status = "enriching"
             await self._store.save_job(job)
-            enriched_leads = await self._enrich.run(verified_leads, job_id)
+            enriched_leads = await self._enrich.run(unique_leads, job_id)
             job.total_enriched = len(enriched_leads)
             await self._store.save_job(job)
 
+            # ── Phase 5: Verify emails + websites ───────────────────────────
+            logger.info("[%s] Phase 5: verifying %d leads", job_id[:8], len(enriched_leads))
+            job.status = "verifying"
+            await self._store.save_job(job)
+            verified_leads = await self._verify.run(enriched_leads, job_id)
+            job.total_verified = len(verified_leads)
+            await self._store.save_job(job)
+
             # ── Phase 6: Score + sort ────────────────────────────────────────
-            logger.info("[%s] Phase 6: scoring %d leads", job_id[:8], len(enriched_leads))
+            logger.info("[%s] Phase 6: scoring %d leads", job_id[:8], len(verified_leads))
             job.status = "scoring"
             await self._store.save_job(job)
-            scored_leads = await self._score_dedupe.score(enriched_leads, job_id)
+            scored_leads = await self._score_dedupe.score(verified_leads, job_id)
             job.total_scored = len(scored_leads)
             await self._store.save_job(job)
 

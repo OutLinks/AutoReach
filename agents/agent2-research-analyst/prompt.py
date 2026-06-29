@@ -21,15 +21,28 @@ def _build_data_context(data: RawResearchData) -> str:
     if data.website_content:
         sections.append(f"## WEBSITE CONTENT\n{data.website_content[:40_000]}")
 
-    if data.linkedin_person:
-        sections.append(f"## LINKEDIN — PERSON\n{data.linkedin_person[:10_000]}")
+    if data.public_person_profile:
+        sections.append(f"## PUBLIC PERSON PROFILE\n{data.public_person_profile[:10_000]}")
 
-    if data.linkedin_company:
-        sections.append(f"## LINKEDIN — COMPANY\n{data.linkedin_company[:10_000]}")
+    if data.public_company_profile:
+        sections.append(f"## PUBLIC COMPANY PROFILE\n{data.public_company_profile[:10_000]}")
+
+    if data.web_search_results:
+        results = "\n".join(
+            f"- {r.title} ({r.url}) — {r.snippet}"
+            for r in data.web_search_results[:10]
+        )
+        sections.append(f"## WEB SEARCH RESULTS\n{results}")
 
     if data.news_snippets:
         snippets = "\n".join(f"- {s}" for s in data.news_snippets[:20])
         sections.append(f"## NEWS ARTICLES\n{snippets}")
+
+    if data.technology_profile:
+        sections.append(f"## TECHNOLOGY PROFILE\n{data.technology_profile}")
+
+    if data.github_profile:
+        sections.append(f"## GITHUB PROFILE\n{data.github_profile}")
 
     if data.social_posts:
         posts = "\n".join(f"- {p}" for p in data.social_posts[:10])
@@ -126,7 +139,7 @@ def build_personal_profile_prompt(
 ) -> tuple[str, str]:
     system = (
         "You are an executive profiler for B2B sales. Your job is to build a "
-        "profile of a decision-maker from their LinkedIn and public presence.\n\n"
+        "profile of a decision-maker from public web and social presence.\n\n"
         "Rules:\n"
         "- Focus on what makes this PERSON specifically reachable — not generic traits.\n"
         "- personal_hooks must be concrete referenceable details "

@@ -15,9 +15,11 @@ from typing import Any
 from ...config import ServiceConfig
 from ...models import RawResearchData
 from .website import WebsiteScraper
-from .linkedin import LinkedInScraper
 from .news import NewsScraper
 from .social import SocialChecker
+from .github import GitHubCollector
+from .technology import TechnologyCollector
+from .web_search import WebSearchCollector
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +28,11 @@ class DataCollector:
     def __init__(self, config: ServiceConfig) -> None:
         self._config = config
         self._website = WebsiteScraper(config)
-        self._linkedin = LinkedInScraper(config)
         self._news = NewsScraper(config)
         self._social = SocialChecker(config)
+        self._web_search = WebSearchCollector(config)
+        self._technology = TechnologyCollector(config)
+        self._github = GitHubCollector(config)
 
     async def collect(self, lead: dict) -> RawResearchData:
         """
@@ -39,24 +43,28 @@ class DataCollector:
         data.sources_attempted = list(self._config.enabled_collection_sources())
 
         # Extract fields from lead dict
-        website = lead.get("website", "")
+        website = lead.get("website", "") or lead.get("company_website", "")
         linkedin_url = lead.get("linkedin_url", "")
-        company_linkedin = lead.get("company_linkedin_url", "")
         company_name = lead.get("company_name", "")
+        lead_name = lead.get("full_name", "") or " ".join(
+            part for part in [lead.get("first_name", ""), lead.get("last_name", "")] if part
+        ) or "Unknown"
+        title = lead.get("title", "")
         twitter = lead.get("twitter_handle", "")
         github = lead.get("github_handle", "")
 
         # Run all scrapers concurrently
         results = await asyncio.gather(
             self._collect_website(website),
-            self._collect_person_linkedin(linkedin_url),
-            self._collect_company_linkedin(company_linkedin),
+            self._collect_web_research(lead_name, title, company_name),
             self._collect_news(company_name),
-            self._collect_social(twitter, github, linkedin_url),
+            self._collect_social(twitter, github),
+            self._collect_technology(website),
+            self._collect_github(company_name, github),
             return_exceptions=True,
         )
 
-        website_pages, li_person, li_company, news, social = results
+        website_pages, web_research, news, social, technology, github_profile = results
 
         # Assign results (log exceptions but don't raise)
         if isinstance(website_pages, dict):
@@ -66,19 +74,20 @@ class DataCollector:
         elif isinstance(website_pages, Exception):
             logger.warning("DataCollector: website scraper failed — %s", website_pages)
 
-        if isinstance(li_person, str) and li_person:
-            data.linkedin_person = li_person
-        if isinstance(li_company, str) and li_company:
-            data.linkedin_company = li_company
-        if (isinstance(li_person, str) and li_person) or (
-            isinstance(li_company, str) and li_company
-        ):
-            data.sources_succeeded.append("proxycurl")
+        if isinstance(web_research, tuple):
+            person_profile, company_profile, search_results = web_research
+            data.public_person_profile = person_profile or None
+            data.public_company_profile = company_profile or None
+            data.web_search_results = search_results
+            if person_profile or company_profile or search_results:
+                data.sources_succeeded.append("tavily")
+        elif isinstance(web_research, Exception):
+            logger.warning("DataCollector: web research failed — %s", web_research)
 
         if isinstance(news, list):
             data.news_articles = news
             if news:
-                data.sources_succeeded.append("serpapi")
+                data.sources_succeeded.append("gnews")
         elif isinstance(news, Exception):
             logger.warning("DataCollector: news scraper failed — %s", news)
 
@@ -86,6 +95,20 @@ class DataCollector:
             profiles, posts = social
             data.social_profiles = profiles
             data.social_posts = posts
+
+        if isinstance(technology, dict):
+            data.technology_profile = technology
+            if technology:
+                data.sources_succeeded.append("wappalyzer")
+        elif isinstance(technology, Exception):
+            logger.warning("DataCollector: technology collector failed — %s", technology)
+
+        if isinstance(github_profile, dict):
+            data.github_profile = github_profile
+            if github_profile:
+                data.sources_succeeded.append("github")
+        elif isinstance(github_profile, Exception):
+            logger.warning("DataCollector: GitHub collector failed — %s", github_profile)
 
         logger.info(
             "DataCollector: collected from %s (attempted: %s)",
@@ -101,26 +124,33 @@ class DataCollector:
             return {}
         return await self._website.scrape(url)
 
-    async def _collect_person_linkedin(self, url: str) -> str:
-        if not url or not self._config.proxycurl.is_ready():
-            return ""
-        result = await self._linkedin.fetch_person(url)
-        return result or ""
-
-    async def _collect_company_linkedin(self, url: str) -> str:
-        if not url or not self._config.proxycurl.is_ready():
-            return ""
-        result = await self._linkedin.fetch_company(url)
-        return result or ""
+    async def _collect_web_research(
+        self,
+        lead_name: str,
+        title: str,
+        company_name: str,
+    ) -> tuple:
+        if not company_name or not self._config.tavily.is_ready():
+            return "", "", []
+        return await self._web_search.search(lead_name, title, company_name)
 
     async def _collect_news(self, company_name: str) -> list:
-        if not company_name or not self._config.serpapi.is_ready():
+        if not company_name or not self._config.gnews.is_ready():
             return []
         return await self._news.search(company_name)
 
     async def _collect_social(
-        self, twitter: str, github: str, linkedin_url: str
+        self, twitter: str, github: str
     ) -> tuple[dict, list]:
         profiles = await self._social.check_profiles(twitter or None, github or None)
-        posts = await self._social.fetch_recent_posts(linkedin_url or "")
-        return profiles, posts
+        return profiles, []
+
+    async def _collect_technology(self, website_url: str) -> dict:
+        if not website_url or not self._config.wappalyzer.is_ready():
+            return {}
+        return await self._technology.detect(website_url)
+
+    async def _collect_github(self, company_name: str, github_handle: str) -> dict:
+        if not self._config.github.is_ready():
+            return {}
+        return await self._github.research(company_name, github_handle)

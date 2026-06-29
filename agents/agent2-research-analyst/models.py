@@ -27,6 +27,13 @@ class NewsArticle(BaseModel):
     source: str = ""
 
 
+class SearchResult(BaseModel):
+    title: str
+    snippet: str
+    url: str
+    source: str = ""
+
+
 class RawResearchData(BaseModel):
     """
     All raw data collected by the Data Collection Layer for one lead.
@@ -36,12 +43,17 @@ class RawResearchData(BaseModel):
     # Website (keys = page slug: "homepage", "about", "services", etc.)
     website_pages: dict[str, str] = {}
 
-    # LinkedIn (ProxyCurl — raw markdown text of profiles)
-    linkedin_person: Optional[str] = None
-    linkedin_company: Optional[str] = None
+    # Public web/person research (Tavily and other public sources)
+    public_person_profile: Optional[str] = None
+    public_company_profile: Optional[str] = None
+    web_search_results: list[SearchResult] = []
 
-    # News (SerpAPI / Google)
+    # News (GNews)
     news_articles: list[NewsArticle] = []
+
+    # Technical/company intelligence
+    technology_profile: dict[str, Any] = {}
+    github_profile: dict[str, Any] = {}
 
     # Social presence
     social_profiles: dict[str, Optional[str]] = {}   # platform → profile URL or None
@@ -76,8 +88,8 @@ class RawResearchData(BaseModel):
         """0–1 fraction of data categories that returned results."""
         checks = [
             bool(self.website_pages),
-            bool(self.linkedin_person),
-            bool(self.linkedin_company),
+            bool(self.public_person_profile or self.web_search_results),
+            bool(self.public_company_profile or self.technology_profile or self.github_profile),
             bool(self.news_articles),
         ]
         return sum(checks) / len(checks)

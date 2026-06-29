@@ -1,4 +1,4 @@
 from .engine import VerifyEngine
-from .hunter import HunterAdapter
+from .abstract import AbstractEmailValidationAdapter
 
-__all__ = ["VerifyEngine", "HunterAdapter"]
+__all__ = ["VerifyEngine", "AbstractEmailValidationAdapter"]

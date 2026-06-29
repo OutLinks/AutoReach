@@ -1,8 +1,8 @@
 """
-SerpAPI-based news scraper.
+GNews-based news scraper.
 
-Searches Google News for recent articles about the company.
-Falls back gracefully if SerpAPI is not configured.
+Searches for recent articles about the company. Falls back gracefully if GNews
+is not configured.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from ...models import NewsArticle
 
 logger = logging.getLogger(__name__)
 
-_SERPAPI_URL = "https://serpapi.com/search"
+_GNEWS_URL = "https://gnews.io/api/v4/search"
 
 
 class NewsScraper:
@@ -25,8 +25,8 @@ class NewsScraper:
         self._config = config
 
     async def search(self, company_name: str) -> list[NewsArticle]:
-        if not self._config.serpapi.is_ready():
-            logger.debug("NewsScraper: SerpAPI not configured, skipping")
+        if not self._config.gnews.is_ready():
+            logger.debug("NewsScraper: GNews not configured, skipping")
             return []
 
         articles: list[NewsArticle] = []
@@ -60,13 +60,12 @@ class NewsScraper:
     ) -> list[NewsArticle]:
         try:
             resp = await client.get(
-                _SERPAPI_URL,
+                _GNEWS_URL,
                 params={
-                    "engine": "google",
                     "q": query,
-                    "tbm": "nws",
-                    "num": "10",
-                    "api_key": self._config.serpapi.api_key,
+                    "max": "10",
+                    "lang": "en",
+                    "apikey": self._config.gnews.api_key,
                 },
             )
 
@@ -75,7 +74,7 @@ class NewsScraper:
                 return []
 
             data = resp.json()
-            results = data.get("news_results") or []
+            results = data.get("articles") or []
             return [self._parse(r) for r in results if r.get("title")]
 
         except httpx.TimeoutException:
@@ -89,8 +88,8 @@ class NewsScraper:
     def _parse(result: dict[str, Any]) -> NewsArticle:
         return NewsArticle(
             title=result.get("title", ""),
-            snippet=result.get("snippet", ""),
-            url=result.get("link", ""),
-            date=result.get("date", ""),
-            source=result.get("source", ""),
+            snippet=result.get("description", ""),
+            url=result.get("url", ""),
+            date=result.get("publishedAt", ""),
+            source=(result.get("source") or {}).get("name", ""),
         )

@@ -14,8 +14,8 @@ from ...config import ServiceConfig
 from ...models import Lead, SearchCriteria
 from ...storage import RedisStore
 from ..base import BaseEngine
-from .apollo import ApolloAdapter
-from .producthunt import ProductHuntAdapter
+from .google_places import GooglePlacesAdapter
+from .tavily import TavilyAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -47,17 +47,17 @@ class SearchEngine(BaseEngine):
         per_api = max(10, criteria.max_results // len(enabled))
 
         tasks: list[asyncio.Task] = []
-        if "apollo" in enabled:
-            adapter = ApolloAdapter(self._config.apollo.api_key)
+        if "google_places" in enabled:
+            adapter = GooglePlacesAdapter(self._config.google_places.api_key)
             tasks.append(asyncio.create_task(
                 self._guarded(adapter.search(criteria, per_api)),
-                name="apollo",
+                name="google_places",
             ))
-        if "producthunt" in enabled:
-            adapter_ph = ProductHuntAdapter(self._config.producthunt.api_key)
+        if "tavily" in enabled:
+            adapter = TavilyAdapter(self._config.tavily.api_key)
             tasks.append(asyncio.create_task(
-                self._guarded(adapter_ph.search(criteria, per_api)),
-                name="producthunt",
+                self._guarded(adapter.search(criteria, per_api)),
+                name="tavily",
             ))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)

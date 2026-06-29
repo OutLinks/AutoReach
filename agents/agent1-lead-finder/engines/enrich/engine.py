@@ -1,11 +1,10 @@
 """
 Module 2 — Enrich Engine.
 
-Enriches verified leads with deeper company and person data from
-ProxyCurl (LinkedIn) and Clearbit (company intelligence).
+Enriches verified leads with lower-cost company, contact, technology, and
+domain intelligence APIs.
 
-Leads with invalid emails are still enriched at the company level —
-the company data remains useful even if we can't email this specific person.
+Leads with invalid or missing emails are still enriched at the company level.
 """
 
 from __future__ import annotations
@@ -17,19 +16,21 @@ from ...config import ServiceConfig
 from ...models import Lead
 from ...storage import RedisStore
 from ..base import BaseEngine
-from .clearbit import ClearbitAdapter
-from .proxycurl import ProxyCurlAdapter
+from .crunchbase import CrunchbaseAdapter
+from .domain_intel import SecurityTrailsAdapter, WhoisXmlAdapter
+from .hunter_domain import HunterDomainSearchAdapter
+from .wappalyzer import WappalyzerAdapter
 
 logger = logging.getLogger(__name__)
 
 
 class EnrichEngine(BaseEngine):
     """
-    Module 2: enriches leads with LinkedIn and company intelligence.
+    Module 2: enriches leads with company and domain intelligence.
 
-    For each lead, both ProxyCurl and Clearbit run in parallel where enabled.
+    For each lead, all configured enrichers run in parallel where enabled.
     Results are merged into the existing Lead — existing fields are never
-    overwritten, so Apollo data (which is generally authoritative) takes priority.
+    overwritten, so search-stage data takes priority.
     """
 
     def __init__(self, config: ServiceConfig, store: RedisStore) -> None:
@@ -37,14 +38,29 @@ class EnrichEngine(BaseEngine):
         self._config = config
         self._store = store
 
-        self._proxycurl = (
-            ProxyCurlAdapter(config.proxycurl.api_key)
-            if config.proxycurl.is_ready()
+        self._hunter = (
+            HunterDomainSearchAdapter(config.hunter.api_key)
+            if config.hunter.is_ready()
             else None
         )
-        self._clearbit = (
-            ClearbitAdapter(config.clearbit.api_key)
-            if config.clearbit.is_ready()
+        self._wappalyzer = (
+            WappalyzerAdapter(config.wappalyzer.api_key)
+            if config.wappalyzer.is_ready()
+            else None
+        )
+        self._crunchbase = (
+            CrunchbaseAdapter(config.crunchbase.api_key)
+            if config.crunchbase.is_ready()
+            else None
+        )
+        self._whoisxml = (
+            WhoisXmlAdapter(config.whoisxml.api_key)
+            if config.whoisxml.is_ready()
+            else None
+        )
+        self._securitytrails = (
+            SecurityTrailsAdapter(config.securitytrails.api_key)
+            if config.securitytrails.is_ready()
             else None
         )
 
@@ -52,7 +68,7 @@ class EnrichEngine(BaseEngine):
         if not leads:
             return []
 
-        if not self._proxycurl and not self._clearbit:
+        if not self._enrichers:
             logger.warning(
                 "No enrich APIs enabled — skipping enrichment, "
                 "advancing all leads with raw data"
@@ -87,15 +103,8 @@ class EnrichEngine(BaseEngine):
         """Run all enabled enrichers in parallel for a single lead."""
         enrich_tasks = []
 
-        if self._proxycurl:
-            enrich_tasks.append(self._retry(self._proxycurl.enrich_person, lead))
-            if lead.company_linkedin_url:
-                enrich_tasks.append(self._retry(self._proxycurl.enrich_company, lead))
-
-        if self._clearbit:
-            enrich_tasks.append(self._retry(self._clearbit.enrich_company, lead))
-            if lead.email and lead.email_status != "invalid":
-                enrich_tasks.append(self._retry(self._clearbit.enrich_person, lead))
+        for enricher in self._enrichers:
+            enrich_tasks.append(self._retry(enricher.enrich, lead))
 
         if enrich_tasks:
             # Run all enrichers concurrently; each writes to the same lead dict
@@ -104,3 +113,17 @@ class EnrichEngine(BaseEngine):
         lead.stage = "enriched"
         lead.touch()
         return lead
+
+    @property
+    def _enrichers(self) -> list:
+        return [
+            enricher
+            for enricher in [
+                self._hunter,
+                self._wappalyzer,
+                self._crunchbase,
+                self._whoisxml,
+                self._securitytrails,
+            ]
+            if enricher is not None
+        ]

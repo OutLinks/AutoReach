@@ -29,11 +29,17 @@ class ServiceConfig:
     firecrawl: APIConfig = field(
         default_factory=lambda: APIConfig(api_key=os.getenv("FIRECRAWL_API_KEY", ""))
     )
-    proxycurl: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("PROXYCURL_API_KEY", ""))
+    tavily: APIConfig = field(
+        default_factory=lambda: APIConfig(api_key=os.getenv("TAVILY_API_KEY", ""))
     )
-    serpapi: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("SERPAPI_API_KEY", ""))
+    gnews: APIConfig = field(
+        default_factory=lambda: APIConfig(api_key=os.getenv("GNEWS_API_KEY", ""))
+    )
+    github: APIConfig = field(
+        default_factory=lambda: APIConfig(api_key=os.getenv("GITHUB_API_KEY", ""))
+    )
+    wappalyzer: APIConfig = field(
+        default_factory=lambda: APIConfig(api_key=os.getenv("WAPPALYZER_API_KEY", ""))
     )
 
     # Model configuration
@@ -49,9 +55,10 @@ class ServiceConfig:
     # Operational limits
     concurrency: int = 3                 # max leads researched in parallel
     max_pages_per_site: int = 5          # max pages Firecrawl scrapes per domain
-    max_news_articles: int = 10          # max SerpAPI results per company
+    max_news_articles: int = 10          # max GNews results per company
+    max_web_results: int = 8             # max Tavily results per company/person
     max_website_chars: int = 40_000      # truncation limit for LLM context
-    max_linkedin_chars: int = 10_000
+    max_public_profile_chars: int = 10_000
 
     # Firecrawl pages to scrape (slugs appended to base URL)
     website_pages_to_scrape: list[str] = field(
@@ -62,10 +69,14 @@ class ServiceConfig:
         sources = []
         if self.firecrawl.is_ready():
             sources.append("firecrawl")
-        if self.proxycurl.is_ready():
-            sources.append("proxycurl")
-        if self.serpapi.is_ready():
-            sources.append("serpapi")
+        if self.tavily.is_ready():
+            sources.append("tavily")
+        if self.gnews.is_ready():
+            sources.append("gnews")
+        if self.github.is_ready():
+            sources.append("github")
+        if self.wappalyzer.is_ready():
+            sources.append("wappalyzer")
         return sources
 
     @classmethod

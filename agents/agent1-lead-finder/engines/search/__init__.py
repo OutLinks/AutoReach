@@ -1,5 +1,5 @@
 from .engine import SearchEngine
-from .apollo import ApolloAdapter
-from .producthunt import ProductHuntAdapter
+from .google_places import GooglePlacesAdapter
+from .tavily import TavilyAdapter
 
-__all__ = ["SearchEngine", "ApolloAdapter", "ProductHuntAdapter"]
+__all__ = ["SearchEngine", "GooglePlacesAdapter", "TavilyAdapter"]

@@ -1,7 +1,7 @@
 """
 Personal profile builder.
 
-Uses LinkedIn data and social activity to build a profile of the
+Uses public profile data and social activity to build a profile of the
 individual decision-maker — not the company.
 """
 
@@ -32,7 +32,7 @@ class PersonalProfileBuilder:
         company_name: str,
         data: RawResearchData,
     ) -> Optional[PersonalProfile]:
-        if not data.linkedin_person and not data.social_posts:
+        if not data.public_person_profile and not data.social_posts and not data.web_search_results:
             logger.debug(
                 "PersonalProfileBuilder: no personal data for %s, skipping", lead_name
             )
