@@ -17,7 +17,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from core.env import load_dotenv
 from core.model_selection import ModelConfig
+
+load_dotenv()
 
 
 @dataclass

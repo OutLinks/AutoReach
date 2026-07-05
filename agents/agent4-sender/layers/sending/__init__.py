@@ -3,6 +3,7 @@ from .sender import SendingLayer
 from .instantly import InstantlyProvider
 from .gmail import GmailProvider
 from .outreach import OutreachProvider
+from .ses import SesProvider
 from .smtp import SmtpProvider
 
 __all__ = [
@@ -12,5 +13,6 @@ __all__ = [
     "InstantlyProvider",
     "GmailProvider",
     "OutreachProvider",
+    "SesProvider",
     "SmtpProvider",
 ]

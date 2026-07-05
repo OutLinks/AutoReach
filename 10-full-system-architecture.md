@@ -726,6 +726,11 @@ Multiple sending accounts distribute volume:
 - Requires SPF/DKIM/DMARC setup
 - Lower volume limits
 
+### AWS SES (Programmable Delivery)
+- Send through Amazon Simple Email Service
+- Requires verified sender/domain and AWS credentials
+- Configure with `AGENT4_PROVIDER=ses` and `AWS_SES_REGION`
+
 ### Custom SMTP (Maximum Control)
 - Your own mail server
 - Full control over sending

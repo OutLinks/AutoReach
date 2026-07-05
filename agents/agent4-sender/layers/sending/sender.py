@@ -2,7 +2,7 @@
 Sending Layer orchestrator.
 
 Owns the provider registry and routes each outgoing message to the configured
-provider (Instantly / Gmail / Outreach / SMTP). The provider is chosen per
+provider (Instantly / Gmail / Outreach / SES / SMTP). The provider is chosen per
 account (an account declares its provider) falling back to the global default.
 
 This layer is delivery only — scheduling decided *when* and *which account*,
@@ -20,6 +20,7 @@ from .base import OutgoingMessage, SendingProvider
 from .instantly import InstantlyProvider
 from .gmail import GmailProvider
 from .outreach import OutreachProvider
+from .ses import SesProvider
 from .smtp import SmtpProvider
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ _PROVIDERS: dict[str, type[SendingProvider]] = {
     "instantly": InstantlyProvider,
     "gmail": GmailProvider,
     "outreach": OutreachProvider,
+    "ses": SesProvider,
     "smtp": SmtpProvider,
 }
 

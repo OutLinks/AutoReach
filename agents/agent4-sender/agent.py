@@ -7,7 +7,7 @@ protects sender reputation — notifying Agent 5 the moment a lead replies.
 
 Five-layer pipeline:
   Layer 1 — Scheduling  : timezone → send-time → volume → warm-up → ScheduledSend
-  Layer 2 — Sending     : Instantly / Gmail / Outreach / SMTP (account rotation)
+  Layer 2 — Sending     : Instantly / Gmail / Outreach / SES / SMTP (account rotation)
   Layer 3 — Tracking    : delivery, open, click, reply
   Layer 4 — Sequence    : day0 → day3 → day7 → day14 breakup (state machine)
   Layer 5 — Reputation  : bounce, complaint, spam-trap, sender-score (pause gate)
