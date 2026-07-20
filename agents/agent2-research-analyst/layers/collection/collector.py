@@ -142,6 +142,8 @@ class DataCollector:
     async def _collect_social(
         self, twitter: str, github: str
     ) -> tuple[dict, list]:
+        if not self._config.social_profile_checks_enabled:
+            return {}, []
         profiles = await self._social.check_profiles(twitter or None, github or None)
         return profiles, []
 

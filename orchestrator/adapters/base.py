@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ..config import OrchestratorConfig
+from ..campaigns import CampaignBrief
 from ..models import StageResult
 from ..state_machine import Stage
 from ..store import OrchestratorStore
@@ -30,6 +31,7 @@ class StageContext:
     store: OrchestratorStore
     lead_ids: list[str]
     now: datetime
+    campaign: CampaignBrief | None = None
 
 
 class AgentAdapter(ABC):

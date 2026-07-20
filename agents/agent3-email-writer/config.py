@@ -16,6 +16,9 @@ from core.model_selection.types import ModelConfig
 
 @dataclass
 class ServiceConfig:
+    # Tailored by the Orchestrator Campaign Planner for a single live run.
+    campaign_instruction: str = ""
+
     # Model
     model: ModelConfig = field(
         default_factory=lambda: ModelConfig(

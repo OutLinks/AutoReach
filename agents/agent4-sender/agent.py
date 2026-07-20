@@ -3,7 +3,8 @@ Agent 4: Sender + Follow-Up Manager
 
 Reads approved emails from Agent 3, sends them at the right time through the
 right account, tracks engagement, runs the 4-touch follow-up sequence, and
-protects sender reputation — notifying Agent 5 the moment a lead replies.
+protects sender reputation — pausing follow-ups when a lead replies and,
+when enabled, notifying Agent 5.
 
 Five-layer pipeline:
   Layer 1 — Scheduling  : timezone → send-time → volume → warm-up → ScheduledSend
@@ -19,7 +20,7 @@ server / provider webhooks call:
     await agent.run_initial()     # send day-0 emails for all approved leads
     await agent.run_followups()   # send any follow-ups that are now due
 
-    agent.handle_reply(sent_id, "looks interesting")   # → notifies Agent 5
+    agent.handle_reply(sent_id, "looks interesting")   # → pauses follow-ups
     agent.handle_bounce(sent_id, "hard")
     agent.handle_complaint(sent_id)
 """
@@ -279,7 +280,7 @@ class SenderAgent:
     # ── Event hooks (called by webhooks / tracking server) ─────────────────────
 
     def handle_reply(self, sent_email_id: str, snippet: str = "") -> Optional[ReplyNotification]:
-        """A reply arrived → pause the sequence and hand off to Agent 5."""
+        """A reply arrived → pause the sequence and optionally hand off to Agent 5."""
         notification = self._tracking.record_reply(sent_email_id, snippet)
         if notification:
             self._sequence.pause_on_reply(notification.lead_id)

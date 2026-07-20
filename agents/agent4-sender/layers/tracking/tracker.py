@@ -33,7 +33,7 @@ class TrackingLayer:
         self.delivery = DeliveryTracker(store)
         self.open = OpenTracker(config, store)
         self.click = ClickTracker(config, store)
-        self.reply = ReplyDetector(store)
+        self.reply = ReplyDetector(store, handoff_enabled=config.reply_handoff_enabled)
 
     def instrument(self, body: str, sent_email_id: str) -> str:
         """Wrap links then inject the open pixel for a sent email's body."""

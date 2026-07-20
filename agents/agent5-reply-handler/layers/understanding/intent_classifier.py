@@ -65,7 +65,7 @@ class IntentClassifier:
         return self._classify_keywords(reply)
 
     async def _classify_llm(self, reply: IncomingReply) -> IntentResult | None:
-        system, user = build_intent_prompt(reply)
+        system, user = build_intent_prompt(reply, self._config.campaign_instruction)
         try:
             adapter = get_model(self._config.model)
             response = await adapter.complete(

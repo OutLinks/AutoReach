@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..config import OrchestratorConfig
+from ..campaigns import CampaignBrief
 from ..models import DISCOVERED, PipelineLead, REPLIED, SENT, FOLLOWING_UP, StageResult
 from ..state_machine import FIND, FOLLOWUP, REPLY, RESEARCH, SEND, WRITE, Stage
 from ..store import OrchestratorStore
@@ -75,15 +76,25 @@ class LiveAdapter(AgentAdapter):
     async def _find(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent1-lead-finder", "agent1_lead_finder")
         agent = mod.LeadFinderAgent(mod.ServiceConfig())
-        await agent.run(ctx.config.targeting.search_prompt)
+        search_request = (
+            ctx.campaign.instruction_for("lead_finder")
+            if ctx.campaign
+            else ctx.config.targeting.search_prompt
+        )
+        await agent.run(search_request)
         # Ingest whatever new leads landed in Agent 1's output.
-        added = await self._ingest_new_leads(ctx.store, ctx.now)
+        added = await self._ingest_new_leads(ctx.store, ctx.now, ctx.campaign)
         return StageResult(
             stage=self.stage.name, agent=self.stage.agent,
             processed=added, succeeded=added, new_lead_ids=[],
         )
 
-    async def _ingest_new_leads(self, store: OrchestratorStore, now: datetime) -> int:
+    async def _ingest_new_leads(
+        self,
+        store: OrchestratorStore,
+        now: datetime,
+        campaign: CampaignBrief | None = None,
+    ) -> int:
         out = _AGENTS_DIR / "agent1-lead-finder" / "output"
         known = {l.id for l in store.all_leads()}
         added = 0
@@ -99,6 +110,8 @@ class LiveAdapter(AgentAdapter):
                     industry=lead.get("industry") or "",
                     quality_score=(lead.get("lead_score") or 0.0) / 100.0,
                     discovered_at=now,
+                    source_job=campaign.id if campaign else "",
+                    metadata={"campaign_id": campaign.id} if campaign else {},
                 ))
                 known.add(lid)
                 added += 1
@@ -109,7 +122,10 @@ class LiveAdapter(AgentAdapter):
 
     async def _research(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent2-research-analyst", "agent2_research_analyst")
-        agent = mod.ResearchAgent(mod.ServiceConfig())
+        config = mod.ServiceConfig()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("research_analyst")
+        agent = mod.ResearchAgent(config)
         await agent.run(lead_ids=ctx.lead_ids)
         # Reconcile from research JSONL: status complete/partial → ok.
         out = _AGENTS_DIR / "agent2-research-analyst" / "output"
@@ -130,7 +146,10 @@ class LiveAdapter(AgentAdapter):
 
     async def _write(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent3-email-writer", "agent3_email_writer")
-        agent = mod.EmailWriterAgent(mod.ServiceConfig())
+        config = mod.ServiceConfig()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("email_writer")
+        agent = mod.EmailWriterAgent(config)
         await agent.run(lead_ids=ctx.lead_ids)
         db = _AGENTS_DIR / "agent3-email-writer" / "output" / "emails.db"
         rows = _read_db(db, "SELECT lead_id, status, quality_score FROM emails", "lead_id")
@@ -151,7 +170,16 @@ class LiveAdapter(AgentAdapter):
 
     async def _send(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent4-sender", "agent4_sender")
-        agent = mod.SenderAgent(mod.ServiceConfig.from_env())
+        config = mod.ServiceConfig.from_env()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("sender")
+            config.daily_send_limit = min(
+                config.daily_send_limit, ctx.campaign.send_policy.emails_per_day
+            )
+            config.hourly_send_limit = min(
+                config.hourly_send_limit, ctx.campaign.send_policy.hourly_send_limit
+            )
+        agent = mod.SenderAgent(config)
         await agent.run_initial(lead_ids=ctx.lead_ids)
         db = _AGENTS_DIR / "agent4-sender" / "output" / "sends.db"
         rows = _read_db(db, "SELECT lead_id, status, bounced FROM sent_emails", "lead_id")
@@ -172,7 +200,16 @@ class LiveAdapter(AgentAdapter):
 
     async def _followup(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent4-sender", "agent4_sender")
-        agent = mod.SenderAgent(mod.ServiceConfig.from_env())
+        config = mod.ServiceConfig.from_env()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("sender")
+            config.daily_send_limit = min(
+                config.daily_send_limit, ctx.campaign.send_policy.emails_per_day
+            )
+            config.hourly_send_limit = min(
+                config.hourly_send_limit, ctx.campaign.send_policy.hourly_send_limit
+            )
+        agent = mod.SenderAgent(config)
         await agent.run_followups()
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -185,7 +222,10 @@ class LiveAdapter(AgentAdapter):
 
     async def _reply(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent5-reply-handler", "agent5_reply_handler")
-        agent = mod.ReplyHandlerAgent(mod.ServiceConfig.from_env())
+        config = mod.ServiceConfig.from_env()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("reply_handler")
+        agent = mod.ReplyHandlerAgent(config)
         await agent.run()
         db = _AGENTS_DIR / "agent5-reply-handler" / "output" / "conversations.db"
         rows = _read_db(db, "SELECT id, status, escalated FROM conversations", "id")

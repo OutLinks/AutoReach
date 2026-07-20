@@ -17,6 +17,12 @@ from core.model_selection.types import ModelConfig
 
 @dataclass
 class ServiceConfig:
+    # Agent 5 is opt-in for the MVP. Set AGENT5_ENABLED=true or construct a
+    # config with enabled=True only after reply automation is ready.
+    enabled: bool = False
+    # Reserved for the reviewed campaign brief when reply handling is enabled.
+    campaign_instruction: str = ""
+
     # Model — used for intent classification and reply generation.
     model: ModelConfig = field(
         default_factory=lambda: ModelConfig(
@@ -81,6 +87,8 @@ class ServiceConfig:
     @classmethod
     def from_env(cls) -> "ServiceConfig":
         cfg = cls()
+        if os.getenv("AGENT5_ENABLED"):
+            cfg.enabled = os.getenv("AGENT5_ENABLED", "false").lower() == "true"
         if os.getenv("AGENT5_SIMULATE"):
             cfg.simulate = os.getenv("AGENT5_SIMULATE", "true").lower() != "false"
         if os.getenv("CALENDLY_LINK"):

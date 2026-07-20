@@ -17,6 +17,9 @@ from core.model_selection.types import ModelConfig
 
 @dataclass
 class ServiceConfig:
+    # Tailored by the Orchestrator Campaign Planner for a single live run.
+    campaign_instruction: str = ""
+
     # Model — used by the sequence layer to write follow-up copy.
     model: ModelConfig = field(
         default_factory=lambda: ModelConfig(
@@ -75,6 +78,9 @@ class ServiceConfig:
     track_opens: bool = True
     track_clicks: bool = True
     tracking_pixel_base_url: str = "https://track.autoreach.local"
+    # Agent 5 is disabled for the MVP. Replies are still recorded and sequences
+    # are paused, but no Agent 5 hand-off file is created unless this is enabled.
+    reply_handoff_enabled: bool = False
 
     # ── Layer 4: Sequence ──────────────────────────────────────────────────────
     # Generate follow-up copy with the LLM; falls back to templates on failure.

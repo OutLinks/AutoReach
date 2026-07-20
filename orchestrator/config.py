@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.model_selection import ModelConfig
+
 
 @dataclass
 class TargetingConfig:
@@ -83,7 +85,6 @@ class ScheduleConfig:
         7: ["find"],
         8: ["research"],
         9: ["write", "send"],
-        10: ["reply"],
         18: ["followup"],
         20: ["report"],
     })
@@ -103,8 +104,19 @@ class OrchestratorConfig:
     retry: RetryConfig = field(default_factory=RetryConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
 
+    # One planner call compiles a user's request into a reusable CampaignBrief.
+    campaign_model: ModelConfig = field(default_factory=lambda: ModelConfig(
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        temperature=0.1,
+    ))
+
     # When True, the engine uses simulated adapters (no real agents / APIs run).
     simulate: bool = True
+    # Agent 5 is not part of the MVP. Enable only when reply ingestion,
+    # automated reply drafting, and human-handoff workflows are ready.
+    reply_handling_enabled: bool = False
     # Follow-up cadence threshold: a SENT lead with no reply after this many days
     # enters the follow-up stage.
     followup_after_days: int = 3
@@ -118,7 +130,7 @@ class OrchestratorConfig:
             "write": self.volume.max_concurrent_writing,
             "send": max(1, self.reputation.hourly_send_limit),
             "followup": max(1, self.reputation.hourly_send_limit),
-            "reply": 3,
+            "reply": 3 if self.reply_handling_enabled else 0,
         }
 
     @classmethod

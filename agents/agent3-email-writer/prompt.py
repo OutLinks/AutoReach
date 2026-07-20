@@ -35,6 +35,14 @@ def _lead_block(ctx: InputContext) -> str:
     )
 
 
+def _campaign_block(ctx: InputContext) -> str:
+    return (
+        f"\nCampaign instructions: {ctx.campaign_instruction}"
+        if ctx.campaign_instruction
+        else ""
+    )
+
+
 # ── 1. Subject line ───────────────────────────────────────────────────────────
 
 def build_subject_prompt(ctx: InputContext) -> tuple[str, str]:
@@ -61,6 +69,7 @@ def build_subject_prompt(ctx: InputContext) -> tuple[str, str]:
         f"Company summary: {ctx.company_summary[:500]}\n"
         f"Pain point angle: {ctx.pain_points_summary[:300]}\n"
         f"{_voice_block(ctx.brand_voice, ctx.sender)}"
+        f"{_campaign_block(ctx)}"
         f"{ideas}"
     )
 
@@ -92,6 +101,7 @@ def build_hook_prompt(ctx: InputContext, subject: str) -> tuple[str, str]:
         f"Personal details to reference: {hooks}\n"
         f"{hook_ref}\n"
         f"{_voice_block(ctx.brand_voice, ctx.sender)}"
+        f"{_campaign_block(ctx)}"
     )
 
     return system, user
@@ -125,6 +135,7 @@ def build_body_prompt(ctx: InputContext, subject: str, hook: str) -> tuple[str, 
         f"Pain point to address: {ctx.pain_points_summary[:500]}\n"
         f"Template structure: {ctx.template.structure_guide}\n\n"
         f"{_voice_block(ctx.brand_voice, ctx.sender)}"
+        f"{_campaign_block(ctx)}"
     )
 
     return system, user
@@ -152,6 +163,7 @@ def build_cta_prompt(ctx: InputContext, body: str) -> tuple[str, str]:
         f"{_lead_block(ctx)}\n"
         f"{cta_ref}\n"
         f"{_voice_block(ctx.brand_voice, ctx.sender)}"
+        f"{_campaign_block(ctx)}"
     )
 
     return system, user
@@ -216,6 +228,7 @@ def build_revision_prompt(
         f"SUGGESTIONS:\n{suggestion_list}\n\n"
         f"{_lead_block(ctx)}\n"
         f"{_voice_block(ctx.brand_voice, ctx.sender)}"
+        f"{_campaign_block(ctx)}"
     )
 
     return system, user

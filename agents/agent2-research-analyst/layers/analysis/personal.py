@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 class PersonalProfileBuilder:
     def __init__(self, config: ServiceConfig) -> None:
         self._adapter = get_model(config.model)
+        self._campaign_instruction = config.campaign_instruction
 
     async def build(
         self,
@@ -38,7 +39,9 @@ class PersonalProfileBuilder:
             )
             return None
 
-        system, user = build_personal_profile_prompt(lead_name, title, company_name, data)
+        system, user = build_personal_profile_prompt(
+            lead_name, title, company_name, data, self._campaign_instruction
+        )
 
         try:
             response = await self._adapter.complete(

@@ -1,9 +1,10 @@
 """
 Configuration for Agent 2: Research Analyst.
 
-All API keys are read from environment variables. Setting a key to "" or
-leaving the env var unset disables that service; the system prompt and
-collection layer adapt automatically.
+The MVP is Firecrawl-only for data collection: it scrapes the lead's public
+website and passes that evidence to the LLM analysis layer. Tavily, GNews,
+GitHub, Wappalyzer, and direct social-profile checks are optional enhancements
+and start disabled, even if their environment variables are present.
 """
 
 from __future__ import annotations
@@ -28,22 +29,38 @@ class APIConfig:
 
 @dataclass
 class ServiceConfig:
-    # Data Collection APIs
+    # Tailored by the Orchestrator Campaign Planner for a single live run.
+    campaign_instruction: str = ""
+
+    # ── MVP website scraping ────────────────────────────────────────────────
     firecrawl: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("FIRECRAWL_API_KEY", ""))
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("FIRECRAWL_API_KEY", ""), enabled=True
+        )
     )
+
+    # ── Optional enrichment APIs (disabled for the MVP) ─────────────────────
     tavily: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("TAVILY_API_KEY", ""))
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("TAVILY_API_KEY", ""), enabled=False
+        )
     )
     gnews: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("GNEWS_API_KEY", ""))
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("GNEWS_API_KEY", ""), enabled=False
+        )
     )
     github: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("GITHUB_API_KEY", ""))
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("GITHUB_API_KEY", ""), enabled=False
+        )
     )
     wappalyzer: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("WAPPALYZER_API_KEY", ""))
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("WAPPALYZER_API_KEY", ""), enabled=False
+        )
     )
+    social_profile_checks_enabled: bool = False
 
     # Model configuration
     model: ModelConfig = field(

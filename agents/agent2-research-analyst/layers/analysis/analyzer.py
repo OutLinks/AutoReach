@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 class AnalysisLayer:
     def __init__(self, config: ServiceConfig) -> None:
+        self._campaign_instruction = config.campaign_instruction
         self._company = CompanyAnalyzer(config)
         self._pain_points = PainPointExtractor(config)
         self._personal = PersonalProfileBuilder(config)
@@ -71,7 +72,8 @@ class AnalysisLayer:
         # Phase 2: dependent analyses — run concurrently but after phase 1
         email_result, quality_result = await asyncio.gather(
             self._email_angle.strategize(
-                lead_name, company_name, company_profile, pain_points, personal_profile
+                lead_name, company_name, company_profile, pain_points, personal_profile,
+                self._campaign_instruction,
             ),
             self._quality.score(
                 lead_name,
@@ -80,6 +82,7 @@ class AnalysisLayer:
                 pain_points,
                 personal_profile,
                 data.completeness,
+                self._campaign_instruction,
             ),
             return_exceptions=True,
         )

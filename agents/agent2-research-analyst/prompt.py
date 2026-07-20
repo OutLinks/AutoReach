@@ -14,7 +14,7 @@ from .models import RawResearchData
 
 # ── Shared data-context builder ───────────────────────────────────────────────
 
-def _build_data_context(data: RawResearchData) -> str:
+def _build_data_context(data: RawResearchData, campaign_instruction: str = "") -> str:
     """Assembles all available raw data into a single labelled context block."""
     sections: list[str] = []
 
@@ -48,6 +48,9 @@ def _build_data_context(data: RawResearchData) -> str:
         posts = "\n".join(f"- {p}" for p in data.social_posts[:10])
         sections.append(f"## RECENT LINKEDIN POSTS\n{posts}")
 
+    if campaign_instruction:
+        sections.append(f"## CAMPAIGN RESEARCH INSTRUCTIONS\n{campaign_instruction}")
+
     if not sections:
         return "## DATA\n(No data was collected for this lead.)"
 
@@ -60,6 +63,7 @@ def build_company_profile_prompt(
     lead_name: str,
     company_name: str,
     data: RawResearchData,
+    campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
         "You are a B2B market intelligence analyst. Your job is to produce a "
@@ -83,7 +87,7 @@ def build_company_profile_prompt(
     user = (
         f"Analyze this company: **{company_name}**\n"
         f"Contact person: {lead_name}\n\n"
-        f"{_build_data_context(data)}"
+        f"{_build_data_context(data, campaign_instruction)}"
     )
 
     return system, user
@@ -95,6 +99,7 @@ def build_pain_points_prompt(
     lead_name: str,
     company_name: str,
     data: RawResearchData,
+    campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
         "You are a sales intelligence specialist. Your job is to identify "
@@ -123,7 +128,7 @@ def build_pain_points_prompt(
     user = (
         f"Find pain points for: **{company_name}**\n"
         f"Contact person: {lead_name}\n\n"
-        f"{_build_data_context(data)}"
+        f"{_build_data_context(data, campaign_instruction)}"
     )
 
     return system, user
@@ -136,6 +141,7 @@ def build_personal_profile_prompt(
     title: str,
     company_name: str,
     data: RawResearchData,
+    campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
         "You are an executive profiler for B2B sales. Your job is to build a "
@@ -159,7 +165,7 @@ def build_personal_profile_prompt(
 
     user = (
         f"Profile this person: **{lead_name}**, {title} at {company_name}\n\n"
-        f"{_build_data_context(data)}"
+        f"{_build_data_context(data, campaign_instruction)}"
     )
 
     return system, user
@@ -173,6 +179,7 @@ def build_email_angle_prompt(
     company_profile_json: str,
     pain_points_json: str,
     personal_profile_json: str,
+    campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
         "You are a cold email strategist. Given research on a lead, you determine "
@@ -200,6 +207,7 @@ def build_email_angle_prompt(
         f"## COMPANY PROFILE\n{company_profile_json}\n\n"
         f"## PAIN POINTS\n{pain_points_json}\n\n"
         f"## PERSONAL PROFILE\n{personal_profile_json}"
+        f"\n\n## CAMPAIGN EMAIL-ANGLE INSTRUCTIONS\n{campaign_instruction or 'Use the campaign evidence above.'}"
     )
 
     return system, user
@@ -214,6 +222,7 @@ def build_quality_score_prompt(
     pain_points_json: str,
     personal_profile_json: str,
     data_completeness: float,
+    campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
         "You are a lead quality evaluator for a B2B outreach system. "
@@ -242,6 +251,7 @@ def build_quality_score_prompt(
         f"## COMPANY PROFILE\n{company_profile_json}\n\n"
         f"## PAIN POINTS\n{pain_points_json}\n\n"
         f"## PERSONAL PROFILE\n{personal_profile_json}"
+        f"\n\n## CAMPAIGN QUALIFICATION INSTRUCTIONS\n{campaign_instruction or 'Use the campaign evidence above.'}"
     )
 
     return system, user
