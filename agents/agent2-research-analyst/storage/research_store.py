@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from core.runtime_paths import agent_output_dir
 
 from ..models import ResearchProfile
 
 logger = logging.getLogger(__name__)
 
-_OUTPUT_DIR = Path(__file__).parent.parent / "output"
+_OUTPUT_DIR = agent_output_dir("agent2-research-analyst")
 
 
 class ResearchStore:

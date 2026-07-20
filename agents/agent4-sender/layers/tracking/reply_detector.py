@@ -21,6 +21,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from core.runtime_paths import agent_output_dir
+
 from ...models import TrackingEvent
 from ...storage.send_store import SendStore
 
@@ -49,9 +51,7 @@ class ReplyDetector:
         self._store = store
         self._handoff_enabled = handoff_enabled
         # Where Agent 5 picks up reply notifications (file drop = loose coupling).
-        self._handoff_dir = handoff_dir or (
-            Path(__file__).parent.parent.parent / "output" / "replies"
-        )
+        self._handoff_dir = handoff_dir or agent_output_dir("agent4-sender") / "replies"
 
     def record_reply(
         self,

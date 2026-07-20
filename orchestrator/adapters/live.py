@@ -21,7 +21,9 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
+from core.runtime_paths import agent_output_dir
 
 from ..config import OrchestratorConfig
 from ..campaigns import CampaignBrief
@@ -95,8 +97,8 @@ class LiveAdapter(AgentAdapter):
         now: datetime,
         campaign: CampaignBrief | None = None,
     ) -> int:
-        out = _AGENTS_DIR / "agent1-lead-finder" / "output"
-        known = {l.id for l in store.all_leads()}
+        out = agent_output_dir("agent1-lead-finder")
+        known = {lead.id for lead in store.all_leads()}
         added = 0
         for path in sorted(out.glob("leads_*.jsonl")):
             for lead in _stream_jsonl(path):
@@ -128,7 +130,7 @@ class LiveAdapter(AgentAdapter):
         agent = mod.ResearchAgent(config)
         await agent.run(lead_ids=ctx.lead_ids)
         # Reconcile from research JSONL: status complete/partial → ok.
-        out = _AGENTS_DIR / "agent2-research-analyst" / "output"
+        out = agent_output_dir("agent2-research-analyst")
         statuses = _index_jsonl(out.glob("research_*.jsonl"), key="lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -151,7 +153,7 @@ class LiveAdapter(AgentAdapter):
             config.campaign_instruction = ctx.campaign.instruction_for("email_writer")
         agent = mod.EmailWriterAgent(config)
         await agent.run(lead_ids=ctx.lead_ids)
-        db = _AGENTS_DIR / "agent3-email-writer" / "output" / "emails.db"
+        db = agent_output_dir("agent3-email-writer") / "emails.db"
         rows = _read_db(db, "SELECT lead_id, status, quality_score FROM emails", "lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -181,7 +183,7 @@ class LiveAdapter(AgentAdapter):
             )
         agent = mod.SenderAgent(config)
         await agent.run_initial(lead_ids=ctx.lead_ids)
-        db = _AGENTS_DIR / "agent4-sender" / "output" / "sends.db"
+        db = agent_output_dir("agent4-sender") / "sends.db"
         rows = _read_db(db, "SELECT lead_id, status, bounced FROM sent_emails", "lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -227,7 +229,7 @@ class LiveAdapter(AgentAdapter):
             config.campaign_instruction = ctx.campaign.instruction_for("reply_handler")
         agent = mod.ReplyHandlerAgent(config)
         await agent.run()
-        db = _AGENTS_DIR / "agent5-reply-handler" / "output" / "conversations.db"
+        db = agent_output_dir("agent5-reply-handler") / "conversations.db"
         rows = _read_db(db, "SELECT id, status, escalated FROM conversations", "id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -256,7 +258,7 @@ class LiveAdapter(AgentAdapter):
         if self.stage.name != REPLY.name:
             return 0
         now = now or datetime.now(timezone.utc)
-        replies_dir = _AGENTS_DIR / "agent4-sender" / "output" / "replies"
+        replies_dir = agent_output_dir("agent4-sender") / "replies"
         if not replies_dir.exists():
             return 0
         flipped = 0

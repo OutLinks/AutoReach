@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from core.model_selection.types import ModelConfig
+from core.runtime_paths import agent_output_dir
 
 
 @dataclass
@@ -32,14 +32,12 @@ class ServiceConfig:
 
     # Database (Agent 4's own send/tracking store)
     db_path: str = field(
-        default_factory=lambda: str(Path(__file__).parent / "output" / "sends.db")
+        default_factory=lambda: str(agent_output_dir("agent4-sender") / "sends.db")
     )
 
     # Where Agent 3 wrote its emails (the source of what we send)
     emails_db_path: str = field(
-        default_factory=lambda: str(
-            Path(__file__).parent.parent / "agent3-email-writer" / "output" / "emails.db"
-        )
+        default_factory=lambda: str(agent_output_dir("agent3-email-writer") / "emails.db")
     )
 
     # ── Layer 1: Scheduling ────────────────────────────────────────────────────
@@ -100,6 +98,13 @@ class ServiceConfig:
         cfg.provider = os.getenv("AGENT4_PROVIDER", cfg.provider)
         if os.getenv("AGENT4_SIMULATE"):
             cfg.simulate = os.getenv("AGENT4_SIMULATE", "true").lower() != "false"
+        if os.getenv("AGENT4_REPLY_HANDOFF_ENABLED"):
+            cfg.reply_handoff_enabled = (
+                os.getenv("AGENT4_REPLY_HANDOFF_ENABLED", "false").lower() == "true"
+            )
+        cfg.tracking_pixel_base_url = os.getenv(
+            "AGENT4_TRACKING_BASE_URL", cfg.tracking_pixel_base_url
+        )
         return cfg
 
     # ── Helpers ────────────────────────────────────────────────────────────────

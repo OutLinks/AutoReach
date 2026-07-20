@@ -21,13 +21,14 @@ A central orchestrator owns the master lead lifecycle. Individual agents own the
 - Target comparison branch in this Conductor workspace: `origin/main`
 - Latest commit: `be8e9a2` (`Add AWS SES sending provider and environment loading functionality`)
 - Language/runtime: Python 3.10+ syntax is required (`X | None`, standard-library `asyncio`, `sqlite3`).
-- Dependency manifest: [requirements.txt](requirements.txt). There is no `pyproject.toml`, package installer configuration, Docker configuration, CLI, HTTP service, or automated test suite in the repository.
+- Dependency manifest: [requirements.txt](requirements.txt). The repository now includes an authenticated FastAPI backend, a durable single-consumer job executor, an in-process scheduler, Docker/Render packaging, and a standard-library `unittest` suite. There is still no `pyproject.toml`, package installer configuration, migration system, or CI workflow.
 - Current working tree was clean when this document was written.
 
 ## Top-level map
 
 ```text
 core/                              Shared environment and LLM-provider abstraction
+api/                               FastAPI routes, durable jobs, scheduler, runtime settings
 orchestrator/                      Master lifecycle engine, queue control, health/reporting
 agents/agent1-lead-finder/         Discovery, enrichment, verification, scoring, deduplication
 agents/agent2-research-analyst/    Web/company/person research and email-angle analysis
@@ -36,7 +37,23 @@ agents/agent4-sender/              Scheduling, send providers, tracking, sequenc
 agents/agent5-reply-handler/       Reply understanding, action, handoff, conversation memory
 10-full-system-architecture.md     Detailed product/architecture narrative
 AI_PROJECT_CONTEXT.md              This implementation handoff
+DEPLOYMENT.md                      Local, Conductor, Docker, Render, and API usage guide
+Dockerfile / render.yaml           Single-instance deployment packaging
 ```
+
+## HTTP backend
+
+The deployable entrypoint is `api.main:app`. All `/v1` routes use Bearer-token
+authentication in production; `/healthz` remains public for hosting probes.
+Campaign planning, pipeline stages, scheduled ticks, and normalized sender
+events are stored as durable jobs in `api/jobs.py` and executed sequentially by
+`api/executor.py`. Interrupted queued/running jobs are recovered after restart.
+
+The sequential worker and one Uvicorn process are intentional: the agents still
+share local JSON/SQLite artifacts. `AUTOREACH_DATA_DIR` redirects every agent,
+orchestrator, and API database into one persistent root. Do not increase the
+Uvicorn worker or service instance count until these stores are migrated to a
+shared database/object store. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
 The agents' directories intentionally contain hyphens. They are not importable as ordinary Python module names; the live orchestrator loads them dynamically under underscore aliases (for example, `agent1_lead_finder`).
 
@@ -195,6 +212,7 @@ Never commit `.env`: it and `.env.*` are ignored. Relevant variables include:
 | Gmail | `GMAIL_ACCESS_TOKEN` |
 | Other sending providers | `INSTANTLY_API_KEY`, `OUTREACH_ACCESS_TOKEN`, `AWS_SES_REGION` or `AWS_REGION` / `AWS_DEFAULT_REGION` |
 | Agent 5 | `AGENT5_SIMULATE`, `CALENDLY_LINK` |
+| Backend | `AUTOREACH_ENV`, `AUTOREACH_API_SECRET`, `AUTOREACH_DATA_DIR`, `AUTOREACH_CORS_ORIGINS`, `AUTOREACH_SCHEDULER_ENABLED`, `AUTOREACH_SCHEDULER_TIMEZONE`, `AUTOREACH_SIMULATE`, `AUTOREACH_REPLY_HANDLING_ENABLED` |
 
 Install the declared dependencies before importing the live agents:
 
@@ -214,7 +232,8 @@ python -m pip install -r requirements.txt
 
 ## Known gaps and things to verify before production
 
-- There is no test suite, executable service/worker, scheduler daemon, migration system, CI configuration, or deployment documentation. The architecture document is substantially more complete than the operational packaging.
+- The backend is intentionally a single-instance MVP. It has no migration system or CI workflow, and its API worker/scheduler cannot scale horizontally while SQLite/file contracts remain.
+- `POST /v1/events/sender` accepts an authenticated normalized event, not a raw public provider webhook. SES/Gmail/Instantly adapters must validate provider signatures before forwarding events.
 - The default orchestrator is simulated. A live campaign is not enabled simply by adding keys; it must use `simulate=False`, running Redis, compatible artifacts, sender accounts, and provider credentials.
 - Agent 4/5 reply detection and tracking are exposed as methods/files, but no inbound webhook server, Gmail polling service, or tracking HTTP endpoint is included in this repo.
 - Agent 4 follow-up reconciliation currently reports all selected leads as `continued`; verify sequence exhaustion/closure behavior when wiring a production scheduler.
@@ -230,4 +249,3 @@ python -m pip install -r requirements.txt
 3. The target agent’s `agent.py`, `config.py`, `models.py`, and `storage/` directory.
 4. [orchestrator/adapters/live.py](orchestrator/adapters/live.py) before changing any cross-agent output schema.
 5. [core/model_selection/__init__.py](core/model_selection/__init__.py) and provider adapters before changing LLM/model behavior.
-

@@ -293,6 +293,18 @@ class OrchestratorStore:
         brief.status = row["status"]
         return brief
 
+    def list_campaigns(self, limit: int = 100, offset: int = 0) -> list[CampaignBrief]:
+        rows = self._conn.execute(
+            "SELECT brief, status FROM campaigns ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        campaigns: list[CampaignBrief] = []
+        for row in rows:
+            brief = CampaignBrief.model_validate_json(row["brief"])
+            brief.status = row["status"]
+            campaigns.append(brief)
+        return campaigns
+
     def activate_campaign(self, campaign_id: str) -> CampaignBrief:
         brief = self.get_campaign(campaign_id)
         if not brief:
