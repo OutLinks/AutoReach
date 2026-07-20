@@ -16,14 +16,18 @@ logger = logging.getLogger(__name__)
 
 class SubjectGenerator:
     def __init__(self, config: ServiceConfig) -> None:
+        self._model = config.model
         self._adapter = get_model(config.model)
 
     async def generate(self, ctx: InputContext) -> str:
         system, user = build_subject_prompt(ctx)
         try:
             response = await self._adapter.complete(
-                messages=[Message(role="user", content=user)],
-                system=system,
+                self._model,
+                [
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
             )
             subject = (response.content or "").strip().strip('"')
             if not subject:

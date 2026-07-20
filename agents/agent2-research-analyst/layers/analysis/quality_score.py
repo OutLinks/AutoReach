@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 class QualityScorer:
     def __init__(self, config: ServiceConfig) -> None:
+        self._model = config.model
         self._adapter = get_model(config.model)
         self._campaign_instruction = config.campaign_instruction
 
@@ -59,8 +60,11 @@ class QualityScorer:
 
         try:
             response = await self._adapter.complete(
-                messages=[Message(role="user", content=user)],
-                system=system,
+                self._model,
+                [
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
             )
             raw = response.content or ""
             return QualityScore(**self._parse(raw))
