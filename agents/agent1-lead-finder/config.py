@@ -1,15 +1,16 @@
 """
 Service configuration for Agent 1: Lead Finder.
 
-Each API service has an `enabled` flag and an `api_key` field.
-Toggle `enabled = False` to turn an API off system-wide — the system prompt
-sent to the LLM will omit that service, and the engines will skip it.
+The lead finder is scrape-first: it discovers companies from public URLs and
+directories supplied in the prompt or `LEAD_FINDER_SOURCE_URLS`. External APIs
+are optional enrichments and are disabled by default. Toggle an API's
+`enabled` flag to opt in; it will still run only when a key is configured.
 
 Load from environment variables or override programmatically:
 
     config = ServiceConfig()              # reads from env vars
-    config.google_places.enabled = False  # disable Places discovery for this run
-    config.abstract.enabled = False       # disable email verification
+    config.tavily.enabled = True          # opt in to Tavily discovery
+    config.hunter.enabled = True          # opt in to Hunter enrichment
 """
 
 from __future__ import annotations
@@ -40,8 +41,12 @@ class ServiceConfig:
     """
     Master configuration for Agent 1.
 
-    Each section maps to one engine. Flip `enabled = False` to remove
-    an API from both the system prompt and the execution pipeline.
+    Public web scraping is the default discovery method. Give it company URLs
+    or pages that link directly to company websites, either in the user prompt
+    or with `LEAD_FINDER_SOURCE_URLS` (comma- or newline-separated).
+
+    Every third-party API starts disabled. Flip its `enabled` flag to `True`
+    only when that paid/credentialed capability is wanted.
 
     Environment variables (set in .env or shell):
         GOOGLE_PLACES_API_KEY, TAVILY_API_KEY,
@@ -55,39 +60,39 @@ class ServiceConfig:
     # ── Search APIs (Module 1) ─────────────────────────────────────────────
     google_places: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("GOOGLE_PLACES_API_KEY", ""),
-        enabled=True,
+        enabled=False,
     ))
     tavily: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("TAVILY_API_KEY", ""),
-        enabled=True,
+        enabled=False,
     ))
 
     # ── Enrich APIs (Module 2) ─────────────────────────────────────────────
     hunter: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("HUNTER_API_KEY", ""),
-        enabled=True,
+        enabled=False,
     ))
     wappalyzer: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("WAPPALYZER_API_KEY", ""),
-        enabled=True,
+        enabled=False,
     ))
     crunchbase: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("CRUNCHBASE_API_KEY", ""),
-        enabled=True,
+        enabled=False,
     ))
     whoisxml: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("WHOISXML_API_KEY", ""),
-        enabled=True,
+        enabled=False,
     ))
     securitytrails: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("SECURITYTRAILS_API_KEY", ""),
-        enabled=True,
+        enabled=False,
     ))
 
     # ── Verify APIs (Module 3) ─────────────────────────────────────────────
     abstract: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("ABSTRACT_API_KEY", ""),
-        enabled=True,
+        enabled=False,
     ))
 
     # ── LLM ───────────────────────────────────────────────────────────────
@@ -101,6 +106,14 @@ class ServiceConfig:
     # ── Pipeline behaviour ─────────────────────────────────────────────────
     max_leads_per_run: int = 50
     concurrency: int = 5            # max concurrent API calls per engine
+
+    # ── Public web scraping (default discovery path) ───────────────────────
+    web_scraper_enabled: bool = True
+    web_scraper_seed_urls: list[str] = field(default_factory=lambda: [
+        url.strip()
+        for url in os.environ.get("LEAD_FINDER_SOURCE_URLS", "").replace("\n", ",").split(",")
+        if url.strip()
+    ])
 
     # ── Redis ─────────────────────────────────────────────────────────────
     redis_url: str = field(
@@ -139,4 +152,4 @@ class ServiceConfig:
         return apis
 
     def any_search_api_ready(self) -> bool:
-        return bool(self.enabled_search_apis())
+        return self.web_scraper_enabled or bool(self.enabled_search_apis())

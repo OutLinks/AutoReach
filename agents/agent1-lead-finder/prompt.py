@@ -16,6 +16,16 @@ from .config import ServiceConfig
 # Each card explains what the API is for, when to prefer it, and what data it
 # returns. Only cards for enabled + keyed APIs are included in the final prompt.
 
+_WEB_SCRAPER_CARD = """\
+### PUBLIC WEB SCRAPER  [default discovery]
+- **Best for**: Discovering companies from public company URLs or curated directory/list pages
+- **Input**: URLs the user includes in their request, plus configured `LEAD_FINDER_SOURCE_URLS`
+- **Does**: Fetches public HTML, follows direct external company links from a source page, and extracts company name, website, page description, and publicly displayed email addresses
+- **Does not do**: Search Google/Bing result pages, bypass access controls, or invent source URLs
+- **Rule**: If no source URL is supplied, ask the user for a public company list/directory URL or configure `LEAD_FINDER_SOURCE_URLS`
+"""
+
+
 _API_CARDS: dict[str, str] = {
     "google_places": """\
 ### GOOGLE PLACES  [search]
@@ -120,10 +130,10 @@ Respond with a **single JSON object** — no markdown fences, no extra text.
   "job_titles": ["founder", "CEO", "owner", "managing director"],
   "keywords": ["real estate agency", "property"],
   "technologies": [],
+  "source_urls": ["https://example.com/curated-b2b-company-list"],
   "max_results": 50,
-  "api_priorities": ["google_places"],
-  "reasoning": "Google Places is best here because we need established local real \
-estate businesses in specific locations. Tavily can supplement web context."
+  "api_priorities": [],
+  "reasoning": "Scrape the public source page supplied by the user and inspect the company websites it links to."
 }
 ```
 
@@ -133,9 +143,9 @@ estate businesses in specific locations. Tavily can supplement web context."
 - `locations`: city names, metro areas, or country names; be specific
 - `job_titles`: exact title keywords to match (lowercase)
 - `technologies`: only populate if the prompt mentions specific tech
+- `source_urls`: public company or curated directory/list URLs from the user's request; never invent URLs
 - `max_results`: default 50 unless the prompt specifies a different number
-- `api_priorities`: list **only** APIs from the ACTIVE SERVICES section above, \
-  in the order you want them called; most important first
+- `api_priorities`: optional paid discovery APIs only. Leave it empty for scrape-only discovery
 - `reasoning`: 1–2 sentences explaining your API selection and strategy
 """
 
@@ -157,16 +167,17 @@ def build_system_prompt(config: ServiceConfig) -> str:
     all_active = search_apis + enrich_apis + verify_apis
 
     # Build the active-services block
-    if all_active:
+    if all_active or config.web_scraper_enabled:
         service_sections: list[str] = []
+        if config.web_scraper_enabled:
+            service_sections.append(_WEB_SCRAPER_CARD)
         for api_name in all_active:
             if api_name in _API_CARDS:
                 service_sections.append(_API_CARDS[api_name])
         services_block = "\n".join(service_sections)
     else:
         services_block = (
-            "> **No API services are currently enabled.** "
-            "Set at least one API key to activate search."
+            "> **Public web scraping is disabled and no optional API services are enabled.**"
         )
 
     # Build API selection guidance based on what's actually available
@@ -185,8 +196,13 @@ def build_system_prompt(config: ServiceConfig) -> str:
             "- **Tavily** is the only active search API — use it for web-first discovery"
         )
 
+    if config.web_scraper_enabled:
+        api_guidance_lines.append(
+            "- Use the **Public Web Scraper** by supplying a public company or directory/list URL; "
+            "it is the default discovery method and does not belong in `api_priorities`"
+        )
     if not search_apis:
-        api_guidance_lines.append("- **No search APIs are active** — set `api_priorities: []`")
+        api_guidance_lines.append("- **No optional search APIs are active** — set `api_priorities: []`")
 
     api_guidance = "\n".join(api_guidance_lines) if api_guidance_lines else ""
 

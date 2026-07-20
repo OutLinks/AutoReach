@@ -54,7 +54,7 @@ class LeadFinderAgent:
         self._config = config or ServiceConfig()
         self._store = RedisStore(self._config.redis_url, self._config.redis_ttl)
 
-        # Four pipeline engines
+        # Scrape-first discovery plus optional API enrichment/verification.
         self._search = SearchEngine(self._config, self._store)
         self._verify = VerifyEngine(self._config, self._store)
         self._enrich = EnrichEngine(self._config, self._store)
@@ -174,7 +174,10 @@ class LeadFinderAgent:
 
         if not content:
             logger.warning("LLM returned empty response — using default criteria")
-            return SearchCriteria(max_results=self._config.max_leads_per_run)
+            return SearchCriteria(
+                max_results=self._config.max_leads_per_run,
+                source_urls=self._extract_urls(prompt),
+            )
 
         # Extract JSON — handle both raw JSON and markdown-fenced JSON
         json_text = self._extract_json(content)
@@ -182,6 +185,10 @@ class LeadFinderAgent:
         try:
             data = json.loads(json_text)
             criteria = SearchCriteria.model_validate(data)
+            # Do not let the planner invent crawl targets. Only URLs explicitly
+            # supplied by the user are eligible; persistent source URLs belong
+            # in LEAD_FINDER_SOURCE_URLS.
+            criteria.source_urls = self._extract_urls(prompt)
             # Clamp max_results to the configured limit
             criteria.max_results = min(criteria.max_results, self._config.max_leads_per_run)
             # Only keep api_priorities that are actually enabled
@@ -196,7 +203,10 @@ class LeadFinderAgent:
             return criteria
         except Exception as exc:
             logger.warning("Failed to parse LLM JSON (%s) — using defaults", exc)
-            return SearchCriteria(max_results=self._config.max_leads_per_run)
+            return SearchCriteria(
+                max_results=self._config.max_leads_per_run,
+                source_urls=self._extract_urls(prompt),
+            )
 
     @staticmethod
     def _extract_json(text: str) -> str:
@@ -210,3 +220,9 @@ class LeadFinderAgent:
         if bare:
             return bare.group(0)
         return text
+
+    @staticmethod
+    def _extract_urls(text: str) -> list[str]:
+        """Return distinct HTTP(S) URLs explicitly present in a user prompt."""
+        urls = re.findall(r"https?://[^\s<>()\[\]{}\"']+", text)
+        return list(dict.fromkeys(url.rstrip(".,;:!?)") for url in urls))
