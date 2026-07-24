@@ -66,7 +66,9 @@ class ServiceConfig:
     )
 
     # ── Layer 2: Sending ───────────────────────────────────────────────────────
-    provider: str = "smtp"           # "instantly" | "gmail" | "outreach" | "ses" | "smtp"
+    # Supported: gmail, instantly, mailgun, outreach, postmark, resend,
+    # sendgrid, ses, and smtp.
+    provider: str = "smtp"
     # When true, providers don't hit any real API — they simulate delivery so the
     # whole pipeline runs end-to-end without credentials (mirrors Agent 3 fallbacks).
     simulate: bool = True

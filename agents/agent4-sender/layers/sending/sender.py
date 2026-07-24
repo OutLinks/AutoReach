@@ -2,8 +2,8 @@
 Sending Layer orchestrator.
 
 Owns the provider registry and routes each outgoing message to the configured
-provider (Instantly / Gmail / Outreach / SES / SMTP). The provider is chosen per
-account (an account declares its provider) falling back to the global default.
+provider. The provider is chosen per account (an account declares its provider),
+falling back to the global default.
 
 This layer is delivery only — scheduling decided *when* and *which account*,
 tracking will instrument the body, and the agent persists the SentEmail record.
@@ -12,14 +12,17 @@ tracking will instrument the body, and the agent persists the SentEmail record.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from ...config import ServiceConfig
 from ...models import SendingAccount, SendResult
 from .base import OutgoingMessage, SendingProvider
 from .instantly import InstantlyProvider
 from .gmail import GmailProvider
+from .mailgun import MailgunProvider
 from .outreach import OutreachProvider
+from .postmark import PostmarkProvider
+from .resend import ResendProvider
+from .sendgrid import SendGridProvider
 from .ses import SesProvider
 from .smtp import SmtpProvider
 
@@ -28,7 +31,11 @@ logger = logging.getLogger(__name__)
 _PROVIDERS: dict[str, type[SendingProvider]] = {
     "instantly": InstantlyProvider,
     "gmail": GmailProvider,
+    "mailgun": MailgunProvider,
     "outreach": OutreachProvider,
+    "postmark": PostmarkProvider,
+    "resend": ResendProvider,
+    "sendgrid": SendGridProvider,
     "ses": SesProvider,
     "smtp": SmtpProvider,
 }

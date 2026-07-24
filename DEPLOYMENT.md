@@ -75,6 +75,29 @@ Uvicorn worker while SQLite/file storage is in use.
 | `AUTOREACH_CORS_ORIGINS` | Comma-separated browser origins | none |
 | `AUTOREACH_REPLY_HANDLING_ENABLED` | Enable Agent 5 orchestration | `false` |
 
+## Email providers
+
+Set `AGENT4_SIMULATE=false`, choose an `AGENT4_PROVIDER`, and provide the matching
+credentials. A single `SENDER_EMAIL` uses the global provider. For account
+rotation, set `AGENT4_ACCOUNTS_FILE` to a JSON list whose entries include
+`email`, `provider`, and optional `display_name` fields.
+
+| `AGENT4_PROVIDER` | Required configuration |
+| --- | --- |
+| `ses` | Standard AWS credential chain plus `AWS_SES_REGION` (or `AWS_REGION`) |
+| `sendgrid` | `SENDGRID_API_KEY`; optionally `SENDGRID_API_BASE` for EU |
+| `mailgun` | `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`; optionally `MAILGUN_API_BASE` for EU |
+| `postmark` | `POSTMARK_SERVER_TOKEN`; optionally `POSTMARK_MESSAGE_STREAM` |
+| `resend` | `RESEND_API_KEY` |
+| `gmail` | OAuth bearer token in `GMAIL_ACCESS_TOKEN` |
+| `instantly` | `INSTANTLY_API_KEY` |
+| `outreach` | `OUTREACH_ACCESS_TOKEN` |
+| `smtp` | `SMTP_HOST`, `SMTP_PORT`, and optional username/password |
+
+Keep the sender/domain verified with the selected provider. Set
+`AGENT4_SIMULATE=true` to exercise provider routing without credentials or live
+delivery.
+
 ## Webhook boundary
 
 `POST /v1/events/sender` accepts normalized reply, bounce, complaint, open, and
