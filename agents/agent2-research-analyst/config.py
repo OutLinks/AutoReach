@@ -1,9 +1,10 @@
 """
 Configuration for Agent 2: Research Analyst.
 
-All API keys are read from environment variables. Setting a key to "" or
-leaving the env var unset disables that service; the system prompt and
-collection layer adapt automatically.
+The MVP is Firecrawl-only for data collection: it scrapes the lead's public
+website and passes that evidence to the LLM analysis layer. Tavily, GNews,
+GitHub, Wappalyzer, and direct social-profile checks are optional enhancements
+and start disabled, even if their environment variables are present.
 """
 
 from __future__ import annotations
@@ -11,7 +12,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from core.env import load_dotenv
 from core.model_selection.types import ModelConfig
+
+load_dotenv()
 
 
 @dataclass
@@ -25,16 +29,38 @@ class APIConfig:
 
 @dataclass
 class ServiceConfig:
-    # Data Collection APIs
+    # Tailored by the Orchestrator Campaign Planner for a single live run.
+    campaign_instruction: str = ""
+
+    # ── MVP website scraping ────────────────────────────────────────────────
     firecrawl: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("FIRECRAWL_API_KEY", ""))
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("FIRECRAWL_API_KEY", ""), enabled=True
+        )
     )
-    proxycurl: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("PROXYCURL_API_KEY", ""))
+
+    # ── Optional enrichment APIs (disabled for the MVP) ─────────────────────
+    tavily: APIConfig = field(
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("TAVILY_API_KEY", ""), enabled=False
+        )
     )
-    serpapi: APIConfig = field(
-        default_factory=lambda: APIConfig(api_key=os.getenv("SERPAPI_API_KEY", ""))
+    gnews: APIConfig = field(
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("GNEWS_API_KEY", ""), enabled=False
+        )
     )
+    github: APIConfig = field(
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("GITHUB_API_KEY", ""), enabled=False
+        )
+    )
+    wappalyzer: APIConfig = field(
+        default_factory=lambda: APIConfig(
+            api_key=os.getenv("WAPPALYZER_API_KEY", ""), enabled=False
+        )
+    )
+    social_profile_checks_enabled: bool = False
 
     # Model configuration
     model: ModelConfig = field(
@@ -49,9 +75,10 @@ class ServiceConfig:
     # Operational limits
     concurrency: int = 3                 # max leads researched in parallel
     max_pages_per_site: int = 5          # max pages Firecrawl scrapes per domain
-    max_news_articles: int = 10          # max SerpAPI results per company
+    max_news_articles: int = 10          # max GNews results per company
+    max_web_results: int = 8             # max Tavily results per company/person
     max_website_chars: int = 40_000      # truncation limit for LLM context
-    max_linkedin_chars: int = 10_000
+    max_public_profile_chars: int = 10_000
 
     # Firecrawl pages to scrape (slugs appended to base URL)
     website_pages_to_scrape: list[str] = field(
@@ -62,10 +89,14 @@ class ServiceConfig:
         sources = []
         if self.firecrawl.is_ready():
             sources.append("firecrawl")
-        if self.proxycurl.is_ready():
-            sources.append("proxycurl")
-        if self.serpapi.is_ready():
-            sources.append("serpapi")
+        if self.tavily.is_ready():
+            sources.append("tavily")
+        if self.gnews.is_ready():
+            sources.append("gnews")
+        if self.github.is_ready():
+            sources.append("github")
+        if self.wappalyzer.is_ready():
+            sources.append("wappalyzer")
         return sources
 
     @classmethod

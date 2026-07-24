@@ -47,7 +47,7 @@ class SendingAccount(BaseModel):
     """A sending identity (mailbox) used to deliver email."""
 
     email: str
-    provider: str = "smtp"           # "instantly" | "gmail" | "outreach" | "smtp"
+    provider: str = "smtp"           # one of the SendingLayer registry keys
     display_name: str = ""
 
     # Volume governance

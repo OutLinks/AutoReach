@@ -22,7 +22,12 @@ class InputAssembler:
         self._sender = sender
         self._templates = TemplateLibrary()
 
-    def assemble(self, research_profile: dict, lead: dict) -> InputContext:
+    def assemble(
+        self,
+        research_profile: dict,
+        lead: dict,
+        campaign_instruction: str = "",
+    ) -> InputContext:
         """
         Assembles an InputContext from Agent 1 + Agent 2 dicts.
         Never raises — missing fields become empty strings.
@@ -61,6 +66,7 @@ class InputAssembler:
             recommended_cta=email_angle.get("recommended_cta", ""),
             recommended_tone=email_angle.get("tone", self._voice.tone),
             subject_line_ideas=email_angle.get("subject_lines") or [],
+            campaign_instruction=campaign_instruction,
             template=template,
             brand_voice=self._voice,
             sender=self._sender,

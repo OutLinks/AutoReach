@@ -1,15 +1,16 @@
 """
 Service configuration for Agent 1: Lead Finder.
 
-Each API service has an `enabled` flag and an `api_key` field.
-Toggle `enabled = False` to turn an API off system-wide — the system prompt
-sent to the LLM will omit that service, and the engines will skip it.
+The lead finder is scrape-first: it discovers companies from public URLs and
+directories supplied in the prompt or `LEAD_FINDER_SOURCE_URLS`. External APIs
+are optional enrichments and are disabled by default. Toggle an API's
+`enabled` flag to opt in; it will still run only when a key is configured.
 
 Load from environment variables or override programmatically:
 
     config = ServiceConfig()              # reads from env vars
-    config.apollo.enabled = False         # disable Apollo for this run
-    config.hunter.enabled = False         # disable verification
+    config.tavily.enabled = True          # opt in to Tavily discovery
+    config.hunter.enabled = True          # opt in to Hunter enrichment
 """
 
 from __future__ import annotations
@@ -17,7 +18,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from core.env import load_dotenv
 from core.model_selection import ModelConfig
+
+load_dotenv()
 
 
 @dataclass
@@ -37,41 +41,58 @@ class ServiceConfig:
     """
     Master configuration for Agent 1.
 
-    Each section maps to one engine. Flip `enabled = False` to remove
-    an API from both the system prompt and the execution pipeline.
+    Public web scraping is the default discovery method. Give it company URLs
+    or pages that link directly to company websites, either in the user prompt
+    or with `LEAD_FINDER_SOURCE_URLS` (comma- or newline-separated).
+
+    Every third-party API starts disabled. Flip its `enabled` flag to `True`
+    only when that paid/credentialed capability is wanted.
 
     Environment variables (set in .env or shell):
-        APOLLO_API_KEY, PRODUCTHUNT_API_KEY,
-        PROXYCURL_API_KEY, CLEARBIT_API_KEY,
-        HUNTER_API_KEY,
+        GOOGLE_PLACES_API_KEY, TAVILY_API_KEY,
+        HUNTER_API_KEY, ABSTRACT_API_KEY,
+        WAPPALYZER_API_KEY, CRUNCHBASE_API_KEY,
+        WHOISXML_API_KEY, SECURITYTRAILS_API_KEY,
         REDIS_URL,
         ANTHROPIC_API_KEY / OPENAI_API_KEY (for the LLM)
     """
 
     # ── Search APIs (Module 1) ─────────────────────────────────────────────
-    apollo: APIConfig = field(default_factory=lambda: APIConfig(
-        api_key=os.environ.get("APOLLO_API_KEY", ""),
-        enabled=True,
+    google_places: APIConfig = field(default_factory=lambda: APIConfig(
+        api_key=os.environ.get("GOOGLE_PLACES_API_KEY", ""),
+        enabled=False,
     ))
-    producthunt: APIConfig = field(default_factory=lambda: APIConfig(
-        api_key=os.environ.get("PRODUCTHUNT_API_KEY", ""),
-        enabled=True,
+    tavily: APIConfig = field(default_factory=lambda: APIConfig(
+        api_key=os.environ.get("TAVILY_API_KEY", ""),
+        enabled=False,
     ))
 
     # ── Enrich APIs (Module 2) ─────────────────────────────────────────────
-    proxycurl: APIConfig = field(default_factory=lambda: APIConfig(
-        api_key=os.environ.get("PROXYCURL_API_KEY", ""),
-        enabled=True,
+    hunter: APIConfig = field(default_factory=lambda: APIConfig(
+        api_key=os.environ.get("HUNTER_API_KEY", ""),
+        enabled=False,
     ))
-    clearbit: APIConfig = field(default_factory=lambda: APIConfig(
-        api_key=os.environ.get("CLEARBIT_API_KEY", ""),
-        enabled=True,
+    wappalyzer: APIConfig = field(default_factory=lambda: APIConfig(
+        api_key=os.environ.get("WAPPALYZER_API_KEY", ""),
+        enabled=False,
+    ))
+    crunchbase: APIConfig = field(default_factory=lambda: APIConfig(
+        api_key=os.environ.get("CRUNCHBASE_API_KEY", ""),
+        enabled=False,
+    ))
+    whoisxml: APIConfig = field(default_factory=lambda: APIConfig(
+        api_key=os.environ.get("WHOISXML_API_KEY", ""),
+        enabled=False,
+    ))
+    securitytrails: APIConfig = field(default_factory=lambda: APIConfig(
+        api_key=os.environ.get("SECURITYTRAILS_API_KEY", ""),
+        enabled=False,
     ))
 
     # ── Verify APIs (Module 3) ─────────────────────────────────────────────
-    hunter: APIConfig = field(default_factory=lambda: APIConfig(
-        api_key=os.environ.get("HUNTER_API_KEY", ""),
-        enabled=True,
+    abstract: APIConfig = field(default_factory=lambda: APIConfig(
+        api_key=os.environ.get("ABSTRACT_API_KEY", ""),
+        enabled=False,
     ))
 
     # ── LLM ───────────────────────────────────────────────────────────────
@@ -86,6 +107,14 @@ class ServiceConfig:
     max_leads_per_run: int = 50
     concurrency: int = 5            # max concurrent API calls per engine
 
+    # ── Public web scraping (default discovery path) ───────────────────────
+    web_scraper_enabled: bool = True
+    web_scraper_seed_urls: list[str] = field(default_factory=lambda: [
+        url.strip()
+        for url in os.environ.get("LEAD_FINDER_SOURCE_URLS", "").replace("\n", ",").split(",")
+        if url.strip()
+    ])
+
     # ── Redis ─────────────────────────────────────────────────────────────
     redis_url: str = field(
         default_factory=lambda: os.environ.get("REDIS_URL", "redis://localhost:6379")
@@ -96,25 +125,31 @@ class ServiceConfig:
 
     def enabled_search_apis(self) -> list[str]:
         apis = []
-        if self.apollo.is_ready():
-            apis.append("apollo")
-        if self.producthunt.is_ready():
-            apis.append("producthunt")
+        if self.google_places.is_ready():
+            apis.append("google_places")
+        if self.tavily.is_ready():
+            apis.append("tavily")
         return apis
 
     def enabled_enrich_apis(self) -> list[str]:
         apis = []
-        if self.proxycurl.is_ready():
-            apis.append("proxycurl")
-        if self.clearbit.is_ready():
-            apis.append("clearbit")
+        if self.hunter.is_ready():
+            apis.append("hunter_domain_search")
+        if self.wappalyzer.is_ready():
+            apis.append("wappalyzer")
+        if self.crunchbase.is_ready():
+            apis.append("crunchbase")
+        if self.whoisxml.is_ready():
+            apis.append("whoisxml")
+        if self.securitytrails.is_ready():
+            apis.append("securitytrails")
         return apis
 
     def enabled_verify_apis(self) -> list[str]:
         apis = []
-        if self.hunter.is_ready():
-            apis.append("hunter")
+        if self.abstract.is_ready():
+            apis.append("abstract")
         return apis
 
     def any_search_api_ready(self) -> bool:
-        return bool(self.enabled_search_apis())
+        return self.web_scraper_enabled or bool(self.enabled_search_apis())

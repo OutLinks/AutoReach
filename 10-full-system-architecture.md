@@ -353,45 +353,49 @@ OUTPUT: 50 verified leads in Airtable:
 
 ## Data Sources
 
-### Apollo.io (Primary)
-- 270M+ contacts, 65M+ companies
-- Filter by industry, size, location, title
-- Returns: name, email, phone, LinkedIn, company data
-- Free tier: 50 exports/month
+### Google Places API (Primary Business Discovery)
+- Find local and regional businesses by category and location
+- Returns: business name, website, phone, address, reviews, ratings, categories, hours
+- Best for agencies, realtors, dentists, lawyers, restaurants, and office-based companies
 
-### LinkedIn Sales Navigator (Secondary)
-- Most up-to-date professional data
-- Use Proxycurl API or PhantomBuster
-- Returns: profile, experience, education, posts
+### Tavily Search API (AI Search)
+- Find web-first companies, context, competitors, pain points, and recent public pages
+- Returns: search results, AI summaries, relevant pages, and snippets
+- Best for SaaS, startups, niche B2B categories, and broader market research
 
-### Google Custom Search (Supplementary)
-- Find businesses not on Apollo
-- Search: "real estate agency San Francisco"
-- Returns: website, business info
+### Firecrawl / Crawl4AI (Website Crawling)
+- Convert company websites into structured markdown
+- Scrape homepage, about, pricing, team, careers, blog, and case studies
+- Firecrawl is the hosted default; Crawl4AI is the self-hosted alternative
 
-### Industry Directories
-- Zillow Agent Finder, Realtor.com, Yelp, BBB
-- Scrape with Firecrawl
+### GitHub API (Software Company Research)
+- Research repositories, languages, contributors, releases, stars, and activity
+- Useful for B2B SaaS and developer-tool leads
 
 ## Enrichment
 
 | Field | Source | Why |
 |-------|--------|-----|
-| Website | Apollo / Google | For research |
-| LinkedIn | Apollo / Proxycurl | Personalization |
-| Company size | Apollo / LinkedIn | Qualification |
-| Technologies | BuiltWith | Pain point inference |
-| Recent news | Google News | Email personalization |
-| Competitors | Crunchbase | Competitive analysis |
+| Website | Google Places / Tavily | For research |
+| Email | Hunter Domain Search | Contact discovery |
+| Email verification | Abstract Email Validation | Deliverability |
+| Technologies | Wappalyzer | Pain point inference |
+| Recent news | GNews | Email personalization |
+| Startup intelligence | Crunchbase | Funding and growth context |
+| Domain age | WhoisXML | Company maturity signal |
+| DNS intelligence | SecurityTrails | Technical enrichment |
+| Repositories | GitHub API | Product and engineering signals |
 
 ## Email Verification
 
-Using Hunter.io:
+Using Abstract Email Validation:
 - Check deliverability (valid/invalid)
 - Score (0-100)
 - Detect disposable emails
-- Detect webmail vs business email
+- Check syntax, MX, SMTP, and catch-all status
 - Reject if score < 50
+
+Hunter is used for Domain Search contact discovery, not final verification.
 
 ## Lead Scoring
 
@@ -420,13 +424,16 @@ Check before adding:
 
 | Tool | Free | Paid |
 |------|------|------|
-| Apollo.io | 50 exports | $49/mo |
-| Hunter.io | 25 verifies | $49/mo |
-| BuiltWith | None | $295/mo |
-| Proxycurl | None | $0.01/profile |
-| Firecrawl | 500 pages | $29/mo |
+| Google Places API | Low/free usage | Usage-based |
+| Tavily | Free tier | Low monthly/API usage |
+| Hunter Domain Search | Free tier | Paid tiers |
+| Abstract Email Validation | Free tier | Low monthly/API usage |
+| Wappalyzer | Limited/free options | Paid tiers |
+| GNews | Free tier | Paid tiers |
+| Crunchbase | API plan | Paid tiers |
+| Firecrawl | Free tier | Paid tiers |
 
-**Minimum: $0/month | Recommended: ~$100-150/month**
+**Minimum: $0/month with free tiers/self-hosted fallbacks | Recommended: low recurring API spend**
 
 ---
 
@@ -472,26 +479,38 @@ Pages to scrape:
 | Testimonials | Client feedback, common themes |
 | Footer | Social links, company age |
 
-### LinkedIn Scraping
+### Public Web Search
 
-Data to collect:
-- Profile headline and summary
-- Recent posts and activity
-- Experience history
-- Education
-- Skills and endorsements
-- Company page updates
-- Employee count and growth
-
-### Google Search
-
-Search queries:
-- "{company} news 2024 2025"
+Search with Tavily:
+- "{company} news 2025 2026"
 - "{company} competitors"
 - "{company} reviews"
 - "{name} interview"
-- "{industry} trends 2025"
-- "{industry} challenges 2025"
+- "{industry} trends 2026"
+- "{industry} challenges 2026"
+- "{company} hiring"
+
+### Company News
+
+Search with GNews:
+- Funding announcements
+- Product launches
+- Partnerships
+- Expansion and hiring news
+
+### Technology and Developer Signals
+
+Collect with Wappalyzer and GitHub API:
+- CMS, frameworks, analytics, hosting/CDN
+- Payment, marketing, and support tooling
+- Public repositories, languages, releases, stars, and activity
+
+### Legacy Search Patterns
+
+Search queries:
+- "{company} competitors"
+- "{company} reviews"
+- "{name} interview"
 - "{company} hiring"
 
 ## AI Analysis
@@ -706,6 +725,11 @@ Multiple sending accounts distribute volume:
 - Send directly via Gmail
 - Requires SPF/DKIM/DMARC setup
 - Lower volume limits
+
+### AWS SES (Programmable Delivery)
+- Send through Amazon Simple Email Service
+- Requires verified sender/domain and AWS credentials
+- Configure with `AGENT4_PROVIDER=ses` and `AWS_SES_REGION`
 
 ### Custom SMTP (Maximum Control)
 - Your own mail server

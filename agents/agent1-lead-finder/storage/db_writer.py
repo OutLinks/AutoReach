@@ -13,12 +13,14 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from core.runtime_paths import agent_output_dir
+
 from ..models import Lead
 
 logger = logging.getLogger(__name__)
 
 # Default output path — override in production
-_DEFAULT_OUTPUT_DIR = Path(__file__).parent.parent / "output"
+_DEFAULT_OUTPUT_DIR = agent_output_dir("agent1-lead-finder")
 
 
 class DBWriter:

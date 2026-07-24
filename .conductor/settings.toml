@@ -1,0 +1,14 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = "python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt"
+run_mode = "concurrent"
+
+[scripts.run.api]
+command = "AUTOREACH_DATA_DIR=.data .venv/bin/uvicorn api.main:app --host 127.0.0.1 --port $CONDUCTOR_PORT --reload"
+default = true
+icon = "server"
+
+[scripts.run.test]
+command = ".venv/bin/python -m unittest discover -s tests -v"
+icon = "test-tube"

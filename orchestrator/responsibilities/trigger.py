@@ -34,11 +34,13 @@ class Trigger:
 
     def cycle_order(self) -> list[Stage]:
         """
-        The order to attempt stages in a full pipeline cycle. Reply and followup
-        run first so engaged/queued leads are serviced before new volume is added,
-        then the forward pipeline find → research → write → send.
+        The order to attempt stages in a full pipeline cycle. When enabled,
+        replies and follow-ups run before new volume is added; then the forward
+        pipeline runs find → research → write → send.
         """
-        names = ["reply", "followup", "send", "write", "research", "find"]
+        names = ["followup", "send", "write", "research", "find"]
+        if self._config.reply_handling_enabled:
+            names.insert(0, "reply")
         return [STAGE_BY_NAME[n] for n in names]
 
     @staticmethod

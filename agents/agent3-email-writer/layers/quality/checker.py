@@ -87,8 +87,11 @@ class QualityLayer:
         try:
             adapter = get_model(self._config.model)
             response = await adapter.complete(
-                messages=[Message(role="user", content=user)],
-                system=system,
+                self._config.model,
+                [
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
             )
             raw = (response.content or "{}").strip()
             if raw.startswith("```"):

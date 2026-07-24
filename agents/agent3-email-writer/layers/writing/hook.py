@@ -16,14 +16,18 @@ logger = logging.getLogger(__name__)
 
 class HookWriter:
     def __init__(self, config: ServiceConfig) -> None:
+        self._model = config.model
         self._adapter = get_model(config.model)
 
     async def write(self, ctx: InputContext, subject: str) -> str:
         system, user = build_hook_prompt(ctx, subject)
         try:
             response = await self._adapter.complete(
-                messages=[Message(role="user", content=user)],
-                system=system,
+                self._model,
+                [
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
             )
             hook = (response.content or "").strip()
             if not hook:

@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 
 class QualityScorer:
     def __init__(self, config: ServiceConfig) -> None:
+        self._model = config.model
         self._adapter = get_model(config.model)
+        self._campaign_instruction = config.campaign_instruction
 
     async def score(
         self,
@@ -38,6 +40,7 @@ class QualityScorer:
         pain_points: list[PainPoint],
         personal_profile: Optional[PersonalProfile],
         data_completeness: float,
+        campaign_instruction: str = "",
     ) -> Optional[QualityScore]:
         company_json = company_profile.model_dump_json(indent=2) if company_profile else "{}"
         pain_json = json.dumps([p.model_dump() for p in pain_points], indent=2)
@@ -52,12 +55,16 @@ class QualityScorer:
             pain_json,
             personal_json,
             data_completeness,
+            campaign_instruction or self._campaign_instruction,
         )
 
         try:
             response = await self._adapter.complete(
-                messages=[Message(role="user", content=user)],
-                system=system,
+                self._model,
+                [
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
             )
             raw = response.content or ""
             return QualityScore(**self._parse(raw))

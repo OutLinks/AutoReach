@@ -10,13 +10,19 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from core.model_selection.types import ModelConfig
+from core.runtime_paths import agent_output_dir
 
 
 @dataclass
 class ServiceConfig:
+    # Agent 5 is opt-in for the MVP. Set AGENT5_ENABLED=true or construct a
+    # config with enabled=True only after reply automation is ready.
+    enabled: bool = False
+    # Reserved for the reviewed campaign brief when reply handling is enabled.
+    campaign_instruction: str = ""
+
     # Model — used for intent classification and reply generation.
     model: ModelConfig = field(
         default_factory=lambda: ModelConfig(
@@ -29,28 +35,22 @@ class ServiceConfig:
 
     # Agent 5's own conversation store.
     db_path: str = field(
-        default_factory=lambda: str(Path(__file__).parent / "output" / "conversations.db")
+        default_factory=lambda: str(agent_output_dir("agent5-reply-handler") / "conversations.db")
     )
 
     # Where Agent 4 drops reply hand-off files.
     replies_dir: str = field(
-        default_factory=lambda: str(
-            Path(__file__).parent.parent / "agent4-sender" / "output" / "replies"
-        )
+        default_factory=lambda: str(agent_output_dir("agent4-sender") / "replies")
     )
 
     # Agent 3's emails DB — for the original email content (conversation context).
     emails_db_path: str = field(
-        default_factory=lambda: str(
-            Path(__file__).parent.parent / "agent3-email-writer" / "output" / "emails.db"
-        )
+        default_factory=lambda: str(agent_output_dir("agent3-email-writer") / "emails.db")
     )
 
     # Where to drop "stop sequence" signals Agent 4 can pick up.
     sequence_signals_dir: str = field(
-        default_factory=lambda: str(
-            Path(__file__).parent.parent / "agent4-sender" / "output" / "signals"
-        )
+        default_factory=lambda: str(agent_output_dir("agent4-sender") / "signals")
     )
 
     concurrency: int = 3                 # replies need care — keep low (doc)
@@ -81,6 +81,8 @@ class ServiceConfig:
     @classmethod
     def from_env(cls) -> "ServiceConfig":
         cfg = cls()
+        if os.getenv("AGENT5_ENABLED"):
+            cfg.enabled = os.getenv("AGENT5_ENABLED", "false").lower() == "true"
         if os.getenv("AGENT5_SIMULATE"):
             cfg.simulate = os.getenv("AGENT5_SIMULATE", "true").lower() != "false"
         if os.getenv("CALENDLY_LINK"):

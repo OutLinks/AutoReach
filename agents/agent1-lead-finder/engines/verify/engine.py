@@ -1,8 +1,7 @@
 """
 Module 3 — Verify Engine.
 
-Checks every unique lead's email and website before enrichment so we
-don't waste enrichment API credits on dead contacts.
+Checks every unique lead's email and website before scoring.
 """
 
 from __future__ import annotations
@@ -16,14 +15,14 @@ from ...config import ServiceConfig
 from ...models import Lead
 from ...storage import RedisStore
 from ..base import BaseEngine
-from .hunter import HunterAdapter
+from .abstract import AbstractEmailValidationAdapter
 
 logger = logging.getLogger(__name__)
 
 
 class VerifyEngine(BaseEngine):
     """
-    Module 3: validates emails (Hunter.io) and checks website reachability.
+    Module 3: validates emails (Abstract) and checks website reachability.
 
     Leads with email_status="invalid" are kept in the pipeline but flagged —
     the score engine penalises them heavily so they sort to the bottom.
@@ -33,9 +32,9 @@ class VerifyEngine(BaseEngine):
         super().__init__(concurrency=config.concurrency)
         self._config = config
         self._store = store
-        self._hunter = (
-            HunterAdapter(config.hunter.api_key)
-            if config.hunter.is_ready()
+        self._abstract = (
+            AbstractEmailValidationAdapter(config.abstract.api_key)
+            if config.abstract.is_ready()
             else None
         )
 
@@ -67,8 +66,8 @@ class VerifyEngine(BaseEngine):
 
     async def _process_one(self, lead: Lead) -> Lead:
         # Step 1: email verification
-        if self._hunter:
-            lead = await self._retry(self._hunter.verify, lead)
+        if self._abstract:
+            lead = await self._retry(self._abstract.verify, lead)
 
         # Step 2: website reachability (lightweight HEAD request)
         if lead.company_website:

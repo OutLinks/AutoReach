@@ -27,6 +27,7 @@ from . import models as M
 from . import state_machine as SM
 from .adapters import build_adapters
 from .adapters.base import StageContext
+from .campaigns import CampaignBrief, CampaignPlanner
 from .circuit_breaker import RetryPolicy
 from .config import OrchestratorConfig
 from .models import DailyReport, HealthSnapshot, PipelineLead, RunRecord, StageResult
@@ -67,6 +68,25 @@ class Orchestrator:
     def config(self) -> OrchestratorConfig:
         return self._config
 
+    @property
+    def active_campaign(self) -> CampaignBrief | None:
+        """The reviewed campaign brief currently applied to live agent runs."""
+        return self._store.active_campaign()
+
+    async def create_campaign(self, user_prompt: str) -> CampaignBrief:
+        """Compile a user request into a reviewable campaign draft and persist it."""
+        planner = CampaignPlanner(self._config.campaign_model)
+        brief = await planner.plan(user_prompt)
+        self._store.save_campaign(brief)
+        logger.info("Orchestrator: created campaign draft %s", brief.id)
+        return brief
+
+    def activate_campaign(self, campaign_id: str) -> CampaignBrief:
+        """Make a reviewed campaign brief the one used for subsequent live runs."""
+        brief = self._store.activate_campaign(campaign_id)
+        logger.info("Orchestrator: activated campaign %s", brief.id)
+        return brief
+
     # ── Stage execution ─────────────────────────────────────────────────────────
 
     async def run_find(self) -> StageResult:
@@ -74,6 +94,10 @@ class Orchestrator:
 
     async def run_stage(self, stage: SM.Stage, now: Optional[datetime] = None) -> StageResult:
         now = now or datetime.now(timezone.utc)
+
+        if stage.name == SM.REPLY.name and not self._config.reply_handling_enabled:
+            logger.info("Orchestrator: reply stage disabled for the MVP")
+            return StageResult(stage=stage.name, agent=stage.agent, ok=True)
 
         # MONITOR: circuit breaker gate (queue stages only).
         if stage.from_state is not None and not self._monitor.allow(stage.name, now):
@@ -90,7 +114,13 @@ class Orchestrator:
 
         # EXECUTE.
         start = time.monotonic()
-        ctx = StageContext(self._config, self._store, batch, now)
+        ctx = StageContext(
+            self._config,
+            self._store,
+            batch,
+            now,
+            campaign=self.active_campaign,
+        )
         try:
             result = await adapter.execute(ctx)
         except Exception as exc:           # transient stage failure
@@ -134,6 +164,8 @@ class Orchestrator:
         now = now or datetime.now(timezone.utc)
         results: dict[str, StageResult] = {}
         for name in _CYCLE_STAGE_NAMES:
+            if name == SM.REPLY.name and not self._config.reply_handling_enabled:
+                continue
             results[name] = await self.run_stage(SM.STAGE_BY_NAME[name], now)
         self._optimize.tune()
         return results
@@ -231,4 +263,9 @@ class Orchestrator:
 
     def _has_actionable_work(self) -> bool:
         counts = self._store.count_by_state()
-        return any(counts.get(s, 0) for s in _ACTIONABLE)
+        actionable = (
+            _ACTIONABLE - {M.REPLIED}
+            if not self._config.reply_handling_enabled
+            else _ACTIONABLE
+        )
+        return any(counts.get(s, 0) for s in actionable)

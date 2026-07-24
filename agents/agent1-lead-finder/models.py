@@ -26,6 +26,9 @@ class SearchCriteria(BaseModel):
     job_titles: list[str] = []           # e.g. ["CEO", "Founder", "Owner"]
     keywords: list[str] = []
     technologies: list[str] = []         # filter by tech stack
+    # Public company or directory pages to scrape. URLs in the user's prompt
+    # are preferred; configured seed URLs are added by SearchEngine.
+    source_urls: list[str] = []
     max_results: int = 50
     # LLM suggests which enabled APIs to prioritize for this specific search
     api_priorities: list[str] = []

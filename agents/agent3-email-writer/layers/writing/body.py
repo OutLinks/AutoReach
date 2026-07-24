@@ -16,14 +16,18 @@ logger = logging.getLogger(__name__)
 
 class BodyComposer:
     def __init__(self, config: ServiceConfig) -> None:
+        self._model = config.model
         self._adapter = get_model(config.model)
 
     async def compose(self, ctx: InputContext, subject: str, hook: str) -> str:
         system, user = build_body_prompt(ctx, subject, hook)
         try:
             response = await self._adapter.complete(
-                messages=[Message(role="user", content=user)],
-                system=system,
+                self._model,
+                [
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
             )
             body = (response.content or "").strip()
             if not body:

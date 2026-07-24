@@ -8,8 +8,8 @@ Pipeline:
   prompt → [LLM] → SearchCriteria
          → SearchEngine   → raw leads in Redis
          → ScoreDedupeEngine.dedupe()  → unique leads in Redis
-         → VerifyEngine   → verified leads in Redis
          → EnrichEngine   → enriched leads in Redis
+         → VerifyEngine   → verified leads in Redis
          → ScoreDedupeEngine.score()   → scored leads in Redis
          → DBWriter       → final output file / database
 """
@@ -42,7 +42,7 @@ class LeadFinderAgent:
 
     Usage:
         config = ServiceConfig()
-        config.apollo.enabled = False  # turn off Apollo for this run
+        config.google_places.enabled = False  # turn off Google Places for this run
 
         agent = LeadFinderAgent(config)
         job = await agent.run("Find 50 real estate founders in San Francisco")
@@ -54,7 +54,7 @@ class LeadFinderAgent:
         self._config = config or ServiceConfig()
         self._store = RedisStore(self._config.redis_url, self._config.redis_ttl)
 
-        # Four pipeline engines
+        # Scrape-first discovery plus optional API enrichment/verification.
         self._search = SearchEngine(self._config, self._store)
         self._verify = VerifyEngine(self._config, self._store)
         self._enrich = EnrichEngine(self._config, self._store)
@@ -104,27 +104,27 @@ class LeadFinderAgent:
             job.total_unique = len(unique_leads)
             await self._store.save_job(job)
 
-            # ── Phase 4: Verify emails + websites ───────────────────────────
-            logger.info("[%s] Phase 4: verifying %d leads", job_id[:8], len(unique_leads))
-            job.status = "verifying"
-            await self._store.save_job(job)
-            verified_leads = await self._verify.run(unique_leads, job_id)
-            job.total_verified = len(verified_leads)
-            await self._store.save_job(job)
-
-            # ── Phase 5: Enrich ──────────────────────────────────────────────
-            logger.info("[%s] Phase 5: enriching %d leads", job_id[:8], len(verified_leads))
+            # ── Phase 4: Enrich ──────────────────────────────────────────────
+            logger.info("[%s] Phase 4: enriching %d leads", job_id[:8], len(unique_leads))
             job.status = "enriching"
             await self._store.save_job(job)
-            enriched_leads = await self._enrich.run(verified_leads, job_id)
+            enriched_leads = await self._enrich.run(unique_leads, job_id)
             job.total_enriched = len(enriched_leads)
             await self._store.save_job(job)
 
+            # ── Phase 5: Verify emails + websites ───────────────────────────
+            logger.info("[%s] Phase 5: verifying %d leads", job_id[:8], len(enriched_leads))
+            job.status = "verifying"
+            await self._store.save_job(job)
+            verified_leads = await self._verify.run(enriched_leads, job_id)
+            job.total_verified = len(verified_leads)
+            await self._store.save_job(job)
+
             # ── Phase 6: Score + sort ────────────────────────────────────────
-            logger.info("[%s] Phase 6: scoring %d leads", job_id[:8], len(enriched_leads))
+            logger.info("[%s] Phase 6: scoring %d leads", job_id[:8], len(verified_leads))
             job.status = "scoring"
             await self._store.save_job(job)
-            scored_leads = await self._score_dedupe.score(enriched_leads, job_id)
+            scored_leads = await self._score_dedupe.score(verified_leads, job_id)
             job.total_scored = len(scored_leads)
             await self._store.save_job(job)
 
@@ -174,7 +174,10 @@ class LeadFinderAgent:
 
         if not content:
             logger.warning("LLM returned empty response — using default criteria")
-            return SearchCriteria(max_results=self._config.max_leads_per_run)
+            return SearchCriteria(
+                max_results=self._config.max_leads_per_run,
+                source_urls=self._extract_urls(prompt),
+            )
 
         # Extract JSON — handle both raw JSON and markdown-fenced JSON
         json_text = self._extract_json(content)
@@ -182,6 +185,10 @@ class LeadFinderAgent:
         try:
             data = json.loads(json_text)
             criteria = SearchCriteria.model_validate(data)
+            # Do not let the planner invent crawl targets. Only URLs explicitly
+            # supplied by the user are eligible; persistent source URLs belong
+            # in LEAD_FINDER_SOURCE_URLS.
+            criteria.source_urls = self._extract_urls(prompt)
             # Clamp max_results to the configured limit
             criteria.max_results = min(criteria.max_results, self._config.max_leads_per_run)
             # Only keep api_priorities that are actually enabled
@@ -196,7 +203,10 @@ class LeadFinderAgent:
             return criteria
         except Exception as exc:
             logger.warning("Failed to parse LLM JSON (%s) — using defaults", exc)
-            return SearchCriteria(max_results=self._config.max_leads_per_run)
+            return SearchCriteria(
+                max_results=self._config.max_leads_per_run,
+                source_urls=self._extract_urls(prompt),
+            )
 
     @staticmethod
     def _extract_json(text: str) -> str:
@@ -210,3 +220,9 @@ class LeadFinderAgent:
         if bare:
             return bare.group(0)
         return text
+
+    @staticmethod
+    def _extract_urls(text: str) -> list[str]:
+        """Return distinct HTTP(S) URLs explicitly present in a user prompt."""
+        urls = re.findall(r"https?://[^\s<>()\[\]{}\"']+", text)
+        return list(dict.fromkeys(url.rstrip(".,;:!?)") for url in urls))

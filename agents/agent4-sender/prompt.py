@@ -40,6 +40,7 @@ def build_followup_prompt(
     original_body: str,
     sender_name: str,
     value_proposition: str = "",
+    campaign_instruction: str = "",
 ) -> tuple[str, str]:
     """Build the (system, user) prompt for one follow-up step."""
     brief = _STEP_BRIEF.get(step, _STEP_BRIEF[STEP_DAY3])
@@ -58,6 +59,7 @@ def build_followup_prompt(
         f"Lead: {lead_first_name} at {lead_company}\n"
         f"Sender: {sender_name}\n"
         f"Value proposition: {value_proposition or 'n/a'}\n\n"
+        f"Campaign follow-up instructions: {campaign_instruction or 'n/a'}\n\n"
         f"ORIGINAL SUBJECT: {original_subject}\n"
         f"ORIGINAL EMAIL:\n{original_body}\n\n"
         "Write the follow-up now."

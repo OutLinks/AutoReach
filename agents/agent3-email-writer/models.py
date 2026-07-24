@@ -79,6 +79,7 @@ class InputContext(BaseModel):
     recommended_cta: str = ""             # from email_angle.recommended_cta
     recommended_tone: str = ""            # from email_angle.tone
     subject_line_ideas: list[str] = []    # from email_angle.subject_lines
+    campaign_instruction: str = ""
 
     # Config
     template: EmailTemplate

@@ -16,61 +16,81 @@ from .config import ServiceConfig
 # Each card explains what the API is for, when to prefer it, and what data it
 # returns. Only cards for enabled + keyed APIs are included in the final prompt.
 
+_WEB_SCRAPER_CARD = """\
+### PUBLIC WEB SCRAPER  [default discovery]
+- **Best for**: Discovering companies from public company URLs or curated directory/list pages
+- **Input**: URLs the user includes in their request, plus configured `LEAD_FINDER_SOURCE_URLS`
+- **Does**: Fetches public HTML, follows direct external company links from a source page, and extracts company name, website, page description, and publicly displayed email addresses
+- **Does not do**: Search Google/Bing result pages, bypass access controls, or invent source URLs
+- **Rule**: If no source URL is supplied, ask the user for a public company list/directory URL or configure `LEAD_FINDER_SOURCE_URLS`
+"""
+
+
 _API_CARDS: dict[str, str] = {
-    "apollo": """\
-### APOLLO.IO  [search]
-- **Best for**: B2B professional contacts — finding decision-makers by title, \
-industry, location, and company size
-- **Coverage**: 270M+ contacts across 65M+ companies worldwide
-- **Returns**: Full name, work email, phone, LinkedIn URL, title, seniority, \
-company name, company website, company size, industry, founded year, city/state/country
-- **Prefer when**: Searching for executives at established businesses (real estate, \
-finance, manufacturing, professional services)
-- **Pagination**: Supports up to 25 results per page, multiple pages
+    "google_places": """\
+### GOOGLE PLACES  [search]
+- **Best for**: Local and regional business discovery by category and location
+- **Returns**: Business name, website, phone, address, ratings, categories, hours
+- **Prefer when**: Searching agencies, realtors, dentists, lawyers, restaurants, \
+local services, or companies with physical offices
+- **Limitation**: Does not return employee emails; Hunter Domain Search runs later
 """,
 
-    "producthunt": """\
-### PRODUCTHUNT  [search]
-- **Best for**: Startup founders, indie makers, and product builders who have \
-launched on Product Hunt
-- **Coverage**: Tech startup makers from the Product Hunt community
-- **Returns**: Maker name, Twitter handle, Product Hunt profile, product name, \
-product website, product description, launch date, upvote count, categories
-- **Prefer when**: Looking for early-stage startup founders, SaaS builders, \
-tech entrepreneurs — especially those who are active in the product/startup community
-- **Limitation**: Does not return email addresses directly; use ProxyCurl or \
-Clearbit to enrich maker profiles with contact data
+    "tavily": """\
+### TAVILY  [search]
+- **Best for**: AI-oriented public web search and company context discovery
+- **Returns**: Relevant pages, snippets/summaries, company websites, recent context
+- **Prefer when**: Searching software companies, niche markets, competitors, pain \
+points, or non-local business categories
+- **Limitation**: Returns web evidence, not guaranteed contact records
 """,
 
-    "proxycurl": """\
-### PROXYCURL  [enrich]
+    "hunter_domain_search": """\
+### HUNTER DOMAIN SEARCH  [enrich]
 - **Used in**: Enrich phase (after search)
-- **Best for**: Deep LinkedIn profile enrichment for both people and companies
-- **Returns (person)**: Current + past experience, education, skills, connections, \
-personal email (when available), phone, profile photo, public posts
-- **Returns (company)**: Employee count, headquarters, specialties, funding rounds, \
-LinkedIn follower count, employee list samples
-- **Trigger**: Run when a lead has a `linkedin_url` or `company_linkedin_url`
+- **Best for**: Finding work emails from a company domain
+- **Returns**: Email, confidence, source, pattern, first/last name, role metadata
+- **Trigger**: Run when a lead has a `company_domain`
 """,
 
-    "clearbit": """\
-### CLEARBIT  [enrich]
+    "wappalyzer": """\
+### WAPPALYZER  [enrich]
 - **Used in**: Enrich phase (after search)
-- **Best for**: Company intelligence from a domain name; person lookup by email
-- **Returns (company)**: Description, industry, employee count, annual revenue \
-estimate, funding total, technology stack, Alexa rank, social profiles, geo-location
-- **Returns (person)**: Full name, bio, Twitter/LinkedIn/GitHub handles, \
-employment history, location
-- **Trigger**: Run when a lead has a `company_domain` or verified `email`
+- **Best for**: Detecting website technologies for personalization
+- **Returns**: CMS, frameworks, analytics, hosting/CDN, payment tools, marketing tools
+- **Trigger**: Run when a lead has a `company_website`
 """,
 
-    "hunter": """\
-### HUNTER.IO  [verify]
+    "crunchbase": """\
+### CRUNCHBASE  [enrich]
+- **Used in**: Enrich phase (after search)
+- **Best for**: Startup/company intelligence
+- **Returns**: Funding, investors, founders, company age, employee estimates, categories
+- **Trigger**: Run when a lead has a company name or domain
+""",
+
+    "whoisxml": """\
+### WHOISXML  [enrich]
+- **Used in**: Enrich phase (after search)
+- **Best for**: Domain registration intelligence
+- **Returns**: Domain age, registrar, creation date, expiration, name servers
+- **Trigger**: Run when a lead has a `company_domain`
+""",
+
+    "securitytrails": """\
+### SECURITYTRAILS  [enrich]
+- **Used in**: Enrich phase (after search)
+- **Best for**: DNS intelligence and technical enrichment
+- **Returns**: Subdomains, DNS records/history, hosting and infrastructure signals
+- **Trigger**: Run when a lead has a `company_domain`
+""",
+
+    "abstract": """\
+### ABSTRACT EMAIL VALIDATION  [verify]
 - **Used in**: Verification phase
 - **Best for**: Email deliverability verification — confirms if an address is \
-safe to send to before spending API credits on enrichment
-- **Returns**: Status (valid/invalid/catch-all/unknown), confidence score (0–100), \
-disposable/webmail detection, MX record check, SMTP check
+safe to send to
+- **Returns**: Deliverability, quality score, syntax, disposable status, MX, SMTP, catch-all
 - **Rule**: Email score < 50 → mark as invalid, skip enrichment for that lead
 """,
 }
@@ -110,10 +130,10 @@ Respond with a **single JSON object** — no markdown fences, no extra text.
   "job_titles": ["founder", "CEO", "owner", "managing director"],
   "keywords": ["real estate agency", "property"],
   "technologies": [],
+  "source_urls": ["https://example.com/curated-b2b-company-list"],
   "max_results": 50,
-  "api_priorities": ["apollo"],
-  "reasoning": "Apollo is best here because we need established real estate \
-businesses, not startups. ProductHunt would only surface tech founders."
+  "api_priorities": [],
+  "reasoning": "Scrape the public source page supplied by the user and inspect the company websites it links to."
 }
 ```
 
@@ -123,9 +143,9 @@ businesses, not startups. ProductHunt would only surface tech founders."
 - `locations`: city names, metro areas, or country names; be specific
 - `job_titles`: exact title keywords to match (lowercase)
 - `technologies`: only populate if the prompt mentions specific tech
+- `source_urls`: public company or curated directory/list URLs from the user's request; never invent URLs
 - `max_results`: default 50 unless the prompt specifies a different number
-- `api_priorities`: list **only** APIs from the ACTIVE SERVICES section above, \
-  in the order you want them called; most important first
+- `api_priorities`: optional paid discovery APIs only. Leave it empty for scrape-only discovery
 - `reasoning`: 1–2 sentences explaining your API selection and strategy
 """
 
@@ -147,36 +167,42 @@ def build_system_prompt(config: ServiceConfig) -> str:
     all_active = search_apis + enrich_apis + verify_apis
 
     # Build the active-services block
-    if all_active:
+    if all_active or config.web_scraper_enabled:
         service_sections: list[str] = []
+        if config.web_scraper_enabled:
+            service_sections.append(_WEB_SCRAPER_CARD)
         for api_name in all_active:
             if api_name in _API_CARDS:
                 service_sections.append(_API_CARDS[api_name])
         services_block = "\n".join(service_sections)
     else:
         services_block = (
-            "> **No API services are currently enabled.** "
-            "Set at least one API key to activate search."
+            "> **Public web scraping is disabled and no optional API services are enabled.**"
         )
 
     # Build API selection guidance based on what's actually available
     api_guidance_lines: list[str] = []
-    if "apollo" in search_apis and "producthunt" in search_apis:
+    if "google_places" in search_apis and "tavily" in search_apis:
         api_guidance_lines.append(
-            "- Use **Apollo** first for established B2B businesses; "
-            "add **ProductHunt** when the prompt mentions startups, founders, or tech"
+            "- Use **Google Places** first for local/business-category searches; "
+            "use **Tavily** for web-first, startup, SaaS, competitor, or pain-point searches"
         )
-    elif "apollo" in search_apis:
+    elif "google_places" in search_apis:
         api_guidance_lines.append(
-            "- **Apollo** is the only active search API — use it for all searches"
+            "- **Google Places** is the only active search API — use it for business discovery"
         )
-    elif "producthunt" in search_apis:
+    elif "tavily" in search_apis:
         api_guidance_lines.append(
-            "- **ProductHunt** is the only active search API — best for tech founders"
+            "- **Tavily** is the only active search API — use it for web-first discovery"
         )
 
+    if config.web_scraper_enabled:
+        api_guidance_lines.append(
+            "- Use the **Public Web Scraper** by supplying a public company or directory/list URL; "
+            "it is the default discovery method and does not belong in `api_priorities`"
+        )
     if not search_apis:
-        api_guidance_lines.append("- **No search APIs are active** — set `api_priorities: []`")
+        api_guidance_lines.append("- **No optional search APIs are active** — set `api_priorities: []`")
 
     api_guidance = "\n".join(api_guidance_lines) if api_guidance_lines else ""
 
@@ -202,7 +228,7 @@ The following API services are currently enabled for this run:
 {api_guidance}
 - Only list APIs in `api_priorities` that appear in ACTIVE SERVICES above
 - If no search APIs are active, set `api_priorities` to an empty list
-- Enrich/verify APIs (ProxyCurl, Clearbit, Hunter) run automatically \
+- Enrich/verify APIs run automatically \
   after search — do not include them in `api_priorities`
 
 ---

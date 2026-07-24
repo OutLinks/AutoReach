@@ -12,18 +12,12 @@ import logging
 from pathlib import Path
 from typing import Any, Generator, Optional
 
+from core.runtime_paths import agent_output_dir
+
 logger = logging.getLogger(__name__)
 
-_AGENT2_OUTPUT_DIR = (
-    Path(__file__).parent.parent.parent.parent.parent
-    / "agent2-research-analyst"
-    / "output"
-)
-_AGENT1_OUTPUT_DIR = (
-    Path(__file__).parent.parent.parent.parent.parent
-    / "agent1-lead-finder"
-    / "output"
-)
+_AGENT2_OUTPUT_DIR = agent_output_dir("agent2-research-analyst")
+_AGENT1_OUTPUT_DIR = agent_output_dir("agent1-lead-finder")
 
 
 class ResearchReader:

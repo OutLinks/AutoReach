@@ -2,14 +2,14 @@
 Reply detector (Tracking Layer #4).
 
 The most important tracking signal: a reply means the lead engaged, so the
-follow-up sequence must stop immediately and Agent 5 (Reply Handler) takes over.
+follow-up sequence must stop immediately. An Agent 5 hand-off is optional.
 
 A reply can arrive via an Instantly webhook, Gmail API polling, or IMAP IDLE. All
 paths converge on `record_reply`, which:
   - logs a "reply" event,
   - flips SentEmail.replied + status,
-  - returns a ReplyNotification the agent forwards to Agent 5 and uses to pause
-    the lead's sequence.
+  - returns a ReplyNotification the caller uses to pause the lead's sequence,
+    and optionally writes an Agent 5 hand-off file.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel
+
+from core.runtime_paths import agent_output_dir
 
 from ...models import TrackingEvent
 from ...storage.send_store import SendStore
@@ -40,12 +42,16 @@ class ReplyNotification(BaseModel):
 
 
 class ReplyDetector:
-    def __init__(self, store: SendStore, handoff_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        store: SendStore,
+        handoff_dir: Path | None = None,
+        handoff_enabled: bool = False,
+    ) -> None:
         self._store = store
+        self._handoff_enabled = handoff_enabled
         # Where Agent 5 picks up reply notifications (file drop = loose coupling).
-        self._handoff_dir = handoff_dir or (
-            Path(__file__).parent.parent.parent / "output" / "replies"
-        )
+        self._handoff_dir = handoff_dir or agent_output_dir("agent4-sender") / "replies"
 
     def record_reply(
         self,
@@ -77,8 +83,11 @@ class ReplyDetector:
             recipient=sent.get("recipient", ""),
             snippet=snippet[:280],
         )
-        self._write_handoff(notification)
-        logger.info("ReplyDetector: reply from lead %s → notifying Agent 5", lead_id)
+        if self._handoff_enabled:
+            self._write_handoff(notification)
+            logger.info("ReplyDetector: reply from lead %s → Agent 5 hand-off created", lead_id)
+        else:
+            logger.info("ReplyDetector: reply from lead %s recorded; Agent 5 hand-off disabled", lead_id)
         return notification
 
     def _write_handoff(self, notification: ReplyNotification) -> None:

@@ -1,7 +1,7 @@
 """
 Personal profile builder.
 
-Uses LinkedIn data and social activity to build a profile of the
+Uses public profile data and social activity to build a profile of the
 individual decision-maker — not the company.
 """
 
@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 class PersonalProfileBuilder:
     def __init__(self, config: ServiceConfig) -> None:
+        self._model = config.model
         self._adapter = get_model(config.model)
+        self._campaign_instruction = config.campaign_instruction
 
     async def build(
         self,
@@ -32,18 +34,23 @@ class PersonalProfileBuilder:
         company_name: str,
         data: RawResearchData,
     ) -> Optional[PersonalProfile]:
-        if not data.linkedin_person and not data.social_posts:
+        if not data.public_person_profile and not data.social_posts and not data.web_search_results:
             logger.debug(
                 "PersonalProfileBuilder: no personal data for %s, skipping", lead_name
             )
             return None
 
-        system, user = build_personal_profile_prompt(lead_name, title, company_name, data)
+        system, user = build_personal_profile_prompt(
+            lead_name, title, company_name, data, self._campaign_instruction
+        )
 
         try:
             response = await self._adapter.complete(
-                messages=[Message(role="user", content=user)],
-                system=system,
+                self._model,
+                [
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
             )
             raw = response.content or ""
             return PersonalProfile(**self._parse(raw))
