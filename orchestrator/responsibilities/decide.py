@@ -63,7 +63,11 @@ class Decide:
         return CLOSED  # "low_quality" or anything unexpected
 
     def _send(self, outcome: str) -> str:
-        return SENT if outcome == "sent" else CLOSED  # bounce → invalid, close out
+        if outcome == "sent":
+            return SENT
+        if outcome == "not_sent":
+            return READY  # temporary capacity/provider skip; retry later
+        return CLOSED  # bounce or invalid recipient
 
     def _followup(self, outcome: str) -> str:
         return NO_REPLY if outcome == "exhausted" else FOLLOWING_UP

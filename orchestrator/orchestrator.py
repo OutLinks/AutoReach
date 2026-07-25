@@ -98,6 +98,14 @@ class Orchestrator:
         if stage.name == SM.REPLY.name and not self._config.reply_handling_enabled:
             logger.info("Orchestrator: reply stage disabled for the MVP")
             return StageResult(stage=stage.name, agent=stage.agent, ok=True)
+        campaign = self.active_campaign
+        if (
+            stage.name == SM.FOLLOWUP.name
+            and campaign
+            and not campaign.send_policy.followup_days
+        ):
+            logger.info("Orchestrator: follow-up stage disabled by active campaign")
+            return StageResult(stage=stage.name, agent=stage.agent, ok=True)
 
         # MONITOR: circuit breaker gate (queue stages only).
         if stage.from_state is not None and not self._monitor.allow(stage.name, now):
@@ -119,7 +127,7 @@ class Orchestrator:
             self._store,
             batch,
             now,
-            campaign=self.active_campaign,
+            campaign=campaign,
         )
         try:
             result = await adapter.execute(ctx)

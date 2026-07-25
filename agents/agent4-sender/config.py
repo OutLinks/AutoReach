@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from core.model_selection.types import ModelConfig
+from core.model_selection.types import ModelConfig, model_config_from_env
 from core.runtime_paths import agent_output_dir
 
 
@@ -22,9 +22,7 @@ class ServiceConfig:
 
     # Model — used by the sequence layer to write follow-up copy.
     model: ModelConfig = field(
-        default_factory=lambda: ModelConfig(
-            provider="anthropic",
-            model="claude-sonnet-4-6",
+        default_factory=lambda: model_config_from_env(
             max_tokens=2048,
             temperature=0.7,
         )
@@ -85,6 +83,7 @@ class ServiceConfig:
     # ── Layer 4: Sequence ──────────────────────────────────────────────────────
     # Generate follow-up copy with the LLM; falls back to templates on failure.
     use_llm_followups: bool = True
+    followups_enabled: bool = True
 
     # ── Layer 5: Reputation ────────────────────────────────────────────────────
     bounce_rate_warning: float = 0.02

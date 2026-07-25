@@ -75,7 +75,7 @@ class Optimize:
         return notes
 
     def _bounce_rate(self) -> float:
-        runs = self._store.recent_runs("send", limit=10)
-        processed = sum(r["processed"] for r in runs)
-        failed = sum(r["failed"] for r in runs)
-        return round(failed / processed, 4) if processed else 0.0
+        bounced = self._store.count_events_with_note("send:bounced")
+        delivered = self._store.count_events_with_note("send:sent")
+        attempted = bounced + delivered
+        return round(bounced / attempted, 4) if attempted else 0.0

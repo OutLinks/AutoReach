@@ -57,6 +57,7 @@ async def check(full_email: str, ctx: InputContext, config: ServiceConfig) -> Qu
         company_name=ctx.lead_company,
         pain_points_summary=ctx.pain_points_summary,
         personal_hooks=ctx.personal_hooks,
+        campaign_instruction=ctx.campaign_instruction,
     )
 
     try:

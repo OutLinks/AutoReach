@@ -141,13 +141,18 @@ class ResearchAgent:
     ) -> list[dict]:
         reader = LeadReader()
 
-        if leads_file:
+        if lead_ids:
+            # The orchestrator already selected these exact records. Do not
+            # silently discard them with Agent 1's sales-oriented A/B grade
+            # filter (job/company research often has no contact email yet).
+            leads = [
+                lead
+                for lead_id in lead_ids
+                if (lead := reader.read_by_id(lead_id)) is not None
+            ]
+        elif leads_file:
             leads = reader.read_file(leads_file, min_grade=min_grade)
         else:
             leads = reader.read_all(min_grade=min_grade)
-
-        if lead_ids:
-            id_set = set(lead_ids)
-            leads = [l for l in leads if l.get("id") in id_set]
 
         return leads

@@ -29,6 +29,9 @@ class RuntimeConfigTests(unittest.TestCase):
                 "AUTOREACH_SIMULATE": "false",
                 "AUTOREACH_REPLY_HANDLING_ENABLED": "true",
                 "AUTOREACH_EMAILS_PER_DAY": "7",
+                "AUTOREACH_LLM_PROVIDER": "openrouter",
+                "AUTOREACH_LLM_MODEL": "anthropic/claude-sonnet-4.6",
+                "AUTOREACH_LLM_MAX_TOKENS": "1600",
             },
             clear=False,
         ):
@@ -36,6 +39,9 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertFalse(config.simulate)
         self.assertTrue(config.reply_handling_enabled)
         self.assertEqual(config.volume.emails_per_day, 7)
+        self.assertEqual(config.campaign_model.provider, "openrouter")
+        self.assertEqual(config.campaign_model.model, "anthropic/claude-sonnet-4.6")
+        self.assertEqual(config.campaign_model.max_tokens, 1600)
 
 
 if __name__ == "__main__":

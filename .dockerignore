@@ -8,5 +8,7 @@
 .data
 **/__pycache__
 **/*.pyc
-**/output
+api/output
+orchestrator/output
+agents/*/output
 tests

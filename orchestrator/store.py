@@ -207,6 +207,13 @@ class OrchestratorStore:
         ).fetchone()
         return row["n"] or 0
 
+    def count_events_with_note(self, note: str) -> int:
+        """Count audited outcomes by their exact transition note."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) n FROM events WHERE note = ?", (note,)
+        ).fetchone()
+        return row["n"] or 0
+
     # ── Runs (history) ─────────────────────────────────────────────────────────
 
     def record_run(self, run: RunRecord) -> None:

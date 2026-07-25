@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from core.model_selection.types import ModelConfig
+from core.model_selection.types import ModelConfig, model_config_from_env
 from core.runtime_paths import agent_output_dir
 
 
@@ -20,9 +20,7 @@ class ServiceConfig:
 
     # Model
     model: ModelConfig = field(
-        default_factory=lambda: ModelConfig(
-            provider="anthropic",
-            model="claude-sonnet-4-6",
+        default_factory=lambda: model_config_from_env(
             max_tokens=4096,
             temperature=0.7,     # higher temperature for creative email writing
         )

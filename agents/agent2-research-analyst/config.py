@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass, field
 
 from core.env import load_dotenv
-from core.model_selection.types import ModelConfig
+from core.model_selection.types import ModelConfig, model_config_from_env
 
 load_dotenv()
 
@@ -64,9 +64,7 @@ class ServiceConfig:
 
     # Model configuration
     model: ModelConfig = field(
-        default_factory=lambda: ModelConfig(
-            provider="anthropic",
-            model="claude-sonnet-4-6",
+        default_factory=lambda: model_config_from_env(
             max_tokens=8192,
             temperature=0.3,
         )

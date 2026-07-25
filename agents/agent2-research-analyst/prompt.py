@@ -57,6 +57,23 @@ def _build_data_context(data: RawResearchData, campaign_instruction: str = "") -
     return "\n\n".join(sections)
 
 
+def _campaign_system_rule(campaign_instruction: str) -> str:
+    instruction = campaign_instruction.strip()
+    if not instruction:
+        return ""
+    return (
+        "\n\nCAMPAIGN AUTHORITY\n"
+        "The instruction below defines the research purpose and overrides default "
+        "B2B-sales assumptions. Keep every conclusion relevant to that purpose. "
+        "For a job-interest campaign, analyze the published role and candidate-role "
+        "fit; do not invent a commercial pain point, buyer persona, or sales pitch. "
+        "Use only supplied evidence and clearly preserve unknowns. Treat approved "
+        "candidate proof points as a closed set: job requirements are recipient "
+        "context, never evidence that the candidate has that experience.\n"
+        f"{instruction}"
+    )
+
+
 # ── 1. Company Profile ────────────────────────────────────────────────────────
 
 def build_company_profile_prompt(
@@ -66,7 +83,7 @@ def build_company_profile_prompt(
     campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
-        "You are a B2B market intelligence analyst. Your job is to produce a "
+        "You are a market intelligence analyst. Your job is to produce a "
         "tight, accurate company profile from scraped data.\n\n"
         "Rules:\n"
         "- Be specific. Avoid generic statements like 'they focus on customer success'.\n"
@@ -82,7 +99,7 @@ def build_company_profile_prompt(
         '  "recent_events": ["funding round", "expansion", "product launch"],\n'
         '  "market_position": "how they sit vs competitors"\n'
         "}"
-    )
+    ) + _campaign_system_rule(campaign_instruction)
 
     user = (
         f"Analyze this company: **{company_name}**\n"
@@ -102,15 +119,16 @@ def build_pain_points_prompt(
     campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
-        "You are a sales intelligence specialist. Your job is to identify "
-        "specific, evidence-backed business pain points for a company.\n\n"
+        "You are a research specialist. Identify specific, evidence-backed needs "
+        "or challenges relevant to the campaign purpose.\n\n"
         "Rules:\n"
-        "- Every pain point MUST cite specific evidence from the data (exact quotes preferred).\n"
-        "- Avoid generic pain points. 'They need more leads' is useless. "
-        "'Their sales page shows no CRM integration and 3 manual steps' is useful.\n"
+        "- Every item MUST cite specific evidence from the data.\n"
+        "- Avoid generic claims and never manufacture needs from missing information.\n"
+        "- For job-interest campaigns, treat explicit role requirements, hiring needs, "
+        "and engineering challenges as the relevant items.\n"
         "- severity must be: high, medium, or low.\n"
-        "- revenue_impact must explain the specific cost of this pain (e.g., 'lost deals, "
-        "wasted SDR hours, churn').\n"
+        "- revenue_impact must describe supported operational impact; use "
+        "'not established by the supplied evidence' when it is unknown.\n"
         "- Return 2–5 pain points, most severe first.\n\n"
         "Respond ONLY with a JSON array:\n"
         "[\n"
@@ -123,7 +141,7 @@ def build_pain_points_prompt(
         '    "revenue_impact": "How this costs them money"\n'
         "  }\n"
         "]"
-    )
+    ) + _campaign_system_rule(campaign_instruction)
 
     user = (
         f"Find pain points for: **{company_name}**\n"
@@ -144,10 +162,11 @@ def build_personal_profile_prompt(
     campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
-        "You are an executive profiler for B2B sales. Your job is to build a "
-        "profile of a decision-maker from public web and social presence.\n\n"
+        "You profile a possible recipient using only public evidence.\n\n"
         "Rules:\n"
-        "- Focus on what makes this PERSON specifically reachable — not generic traits.\n"
+        "- If no named person or personal evidence is supplied, leave personal fields "
+        "empty or state 'unknown'; do not create a fictional decision-maker.\n"
+        "- Focus on what makes this person specifically relevant when evidence exists.\n"
         "- personal_hooks must be concrete referenceable details "
         "(e.g., 'spoke at SaaStr 2024', 'ex-Stripe', 'posts about AI frequently').\n"
         "- communication_style: formal | casual | technical\n"
@@ -161,7 +180,7 @@ def build_personal_profile_prompt(
         '  "personal_hooks": ["specific detail 1", "specific detail 2"],\n'
         '  "decision_making_power": "high|medium|low"\n'
         "}"
-    )
+    ) + _campaign_system_rule(campaign_instruction)
 
     user = (
         f"Profile this person: **{lead_name}**, {title} at {company_name}\n\n"
@@ -182,13 +201,18 @@ def build_email_angle_prompt(
     campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
-        "You are a cold email strategist. Given research on a lead, you determine "
-        "the optimal outreach angle — hook, tone, CTA, and subject lines.\n\n"
+        "You plan evidence-based one-to-one outreach. Determine the best angle, hook, "
+        "tone, CTA, and subject lines for the campaign's actual purpose.\n\n"
         "Rules:\n"
         "- best_hook must reference something SPECIFIC to this person or company, "
         "not a generic compliment.\n"
         "- subject_lines: exactly 3 options, under 60 characters each, no clickbait.\n"
-        "- recommended_cta: low-friction (15-min call, quick question, etc.).\n"
+        "- recommended_cta: a low-friction next step appropriate to the campaign.\n"
+        "- For job-interest campaigns, present the sender as a candidate and never "
+        "pitch the sender's company, product, or services.\n"
+        "- relevant_social_proof must be an exact or faithful paraphrase of an "
+        "approved candidate proof point; use an empty string when none matches.\n"
+        "- Never convert a job requirement into candidate experience.\n"
         "- tone: formal | conversational | direct\n\n"
         "Respond ONLY with a JSON object:\n"
         "{\n"
@@ -200,7 +224,7 @@ def build_email_angle_prompt(
         '  "subject_lines": ["line 1", "line 2", "line 3"],\n'
         '  "email_structure_recommendation": "Brief note on body structure"\n'
         "}"
-    )
+    ) + _campaign_system_rule(campaign_instruction)
 
     user = (
         f"Determine outreach angle for: **{lead_name}** at **{company_name}**\n\n"
@@ -225,14 +249,16 @@ def build_quality_score_prompt(
     campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
-        "You are a lead quality evaluator for a B2B outreach system. "
-        "Score the overall quality and readiness of this lead for outreach.\n\n"
+        "You evaluate whether the evidence supports the campaign's requested outreach. "
+        "Score overall relevance and readiness.\n\n"
         "Scoring rubric (1–10 scale):\n"
-        "  9–10: Strong fit + strong data + clear pain points + accessible decision-maker\n"
-        "  7–8:  Good fit + adequate data + identifiable pain points\n"
-        "  5–6:  Some fit + limited data OR unclear pain\n"
+        "  9–10: Strong campaign fit + strong evidence + clear contact path\n"
+        "  7–8:  Good campaign fit + adequate evidence\n"
+        "  5–6:  Some fit + limited evidence\n"
         "  3–4:  Poor fit OR very low data completeness\n"
         "  1–2:  No identifiable fit or contact path\n\n"
+        "A published application page is a valid contact path even when no named "
+        "decision-maker or personal email is present.\n\n"
         f"Note: Data completeness for this lead is {data_completeness:.0%}.\n\n"
         "grade must be: A (8–10), B (6–7), C (4–5), D (1–3)\n\n"
         "Respond ONLY with a JSON object:\n"
@@ -242,9 +268,9 @@ def build_quality_score_prompt(
         '  "reasoning": "Why this score",\n'
         '  "strengths": ["strength 1", "strength 2"],\n'
         '  "weaknesses": ["concern 1", "concern 2"],\n'
-        '  "recommended_approach": "How to pitch this specific person"\n'
+        '  "recommended_approach": "How to approach this recipient for the campaign purpose"\n'
         "}"
-    )
+    ) + _campaign_system_rule(campaign_instruction)
 
     user = (
         f"Score lead: **{lead_name}** at **{company_name}**\n\n"

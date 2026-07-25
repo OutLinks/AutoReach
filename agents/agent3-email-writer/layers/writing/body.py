@@ -36,7 +36,13 @@ class BodyComposer:
             return body
         except Exception as exc:
             logger.warning("BodyComposer: failed — %s", exc)
-            # Minimal fallback
+            if ctx.campaign_instruction:
+                return (
+                    f"I'm {ctx.sender.full_name}. "
+                    "I'm writing in response to the opportunity described in your "
+                    "company's published information, based on the experience and "
+                    "evidence specified in the campaign instructions."
+                )
             return (
                 f"I'm {ctx.sender.first_name} from {ctx.sender.company}. "
                 f"We work with {ctx.lead_title.lower()}s to {ctx.brand_voice.value_proposition.lower()}."

@@ -44,6 +44,7 @@ class _PageParser(HTMLParser):
         self.title = ""
         self.description = ""
         self.site_name = ""
+        self.og_title = ""
         self._in_title = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -57,6 +58,8 @@ class _PageParser(HTMLParser):
             content = values.get("content", "").strip()
             if key in {"description", "og:description"} and content and not self.description:
                 self.description = content
+            elif key in {"og:title", "twitter:title"} and content and not self.og_title:
+                self.og_title = content
             elif key == "og:site_name" and content:
                 self.site_name = content
 
@@ -97,17 +100,26 @@ class WebScraperAdapter:
                 *(self._fetch(client, url) for url in seeds), return_exceptions=True
             )
 
-            candidate_urls: list[str] = []
+            direct_candidates: list[str] = []
+            discovered_candidates: list[str] = []
             for seed, page in zip(seeds, seed_pages):
                 if isinstance(page, _PageParser):
                     external_links = self._external_company_links(seed, page.links)
-                    # A page with external company links is a directory/list;
-                    # scrape those companies rather than treating the directory
-                    # itself as a lead. A standalone company site remains a
-                    # candidate when it has no direct company links.
-                    candidate_urls.extend(external_links or [seed])
+                    # Multiple explicitly supplied URLs are direct crawl targets:
+                    # retain every one before considering links found on them.
+                    # Preserve the single-directory behavior for a lone source
+                    # that links to several external company domains.
+                    if len(seeds) == 1 and len({
+                        self._domain(url) for url in external_links
+                    }) > 1:
+                        discovered_candidates.extend(external_links)
+                    else:
+                        direct_candidates.append(seed)
+                        discovered_candidates.extend(external_links)
 
-            candidates = self._unique_urls(candidate_urls)[:max_results]
+            candidates = self._unique_urls(
+                [*direct_candidates, *discovered_candidates]
+            )[:max_results]
             pages = await asyncio.gather(
                 *(self._fetch(client, url) for url in candidates), return_exceptions=True
             )
@@ -196,7 +208,13 @@ class WebScraperAdapter:
         criteria: SearchCriteria,
     ) -> Lead | None:
         text = unescape(" ".join(page.text))
-        company_name = page.site_name or cls._clean_title(page.title) or cls._domain(url)
+        company_name = (
+            page.site_name
+            or cls._company_name_hint(url)
+            or cls._clean_title(page.og_title)
+            or cls._clean_title(page.title)
+            or cls._domain(url)
+        )
         if not company_name:
             return None
 
@@ -208,6 +226,7 @@ class WebScraperAdapter:
             company_domain=domain,
             company_description=page.description or text[:500] or None,
             email=emails[0] if emails else None,
+            title=cls._job_title_hint(url, page),
             industry=(criteria.industries or [None])[0],
             website_reachable=True,
             sources=["web_scraper"],
@@ -219,6 +238,44 @@ class WebScraperAdapter:
     def _clean_title(title: str) -> str:
         # Titles commonly use a brand followed by a tagline or page title.
         return re.split(r"\s[|–—-]\s", title.strip(), maxsplit=1)[0].strip()
+
+    @classmethod
+    def _company_name_hint(cls, url: str) -> str:
+        """Infer a readable company name from direct company and ATS URLs."""
+        parsed = urlparse(url)
+        domain = cls._domain(url)
+        if domain == "jobs.ashbyhq.com":
+            parts = [part for part in parsed.path.split("/") if part]
+            slug = parts[0] if parts else ""
+            for suffix in ("careers", "career", "jobs", "hiring"):
+                if slug.lower().endswith(suffix) and len(slug) > len(suffix):
+                    slug = slug[: -len(suffix)]
+                    break
+            return cls._humanize_slug(slug)
+
+        label = domain.split(".", 1)[0]
+        return cls._humanize_slug(label)
+
+    @staticmethod
+    def _humanize_slug(slug: str) -> str:
+        words = re.sub(r"[_-]+", " ", slug).strip()
+        if not words:
+            return ""
+        brand_names = {
+            "openrouter": "OpenRouter",
+        }
+        return brand_names.get(words.lower(), words.title())
+
+    @classmethod
+    def _job_title_hint(cls, url: str, page: _PageParser) -> str | None:
+        domain = cls._domain(url)
+        path = urlparse(url).path.lower()
+        if domain != "jobs.ashbyhq.com" and not any(
+            marker in path for marker in ("/career", "/jobs/", "/job/")
+        ):
+            return None
+        title = cls._clean_title(page.og_title or page.title)
+        return title if title and title.lower() not in {"jobs", "careers"} else None
 
     @staticmethod
     def _public_emails(text: str, company_domain: str) -> list[str]:

@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from ..circuit_breaker import CircuitBreaker
 from ..config import OrchestratorConfig
 from ..models import ACTIVE_STATES, HealthSnapshot, StageHealth
-from ..state_machine import QUEUE_STAGES, Stage
+from ..state_machine import FOLLOWUP, QUEUE_STAGES, Stage
 from ..store import OrchestratorStore
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class Monitor:
         snap = HealthSnapshot(dead_letter_count=self._store.dead_letter_count())
 
         for stage in QUEUE_STAGES:
-            waiting = self._store.leads_in_state(stage.from_state) if stage.from_state else []
+            waiting = self._waiting_leads(stage)
             oldest = self._oldest_wait_hours(waiting, now)
             health = StageHealth(
                 stage=stage.name,
@@ -104,6 +104,18 @@ class Monitor:
         processed = sum(r["processed"] for r in runs)
         failed = sum(r["failed"] for r in runs)
         return round(failed / processed, 4) if processed else 0.0
+
+    def _waiting_leads(self, stage: Stage):
+        waiting = self._store.leads_in_state(stage.from_state) if stage.from_state else []
+        if stage.name != FOLLOWUP.name:
+            return waiting
+        eligible = []
+        for lead in waiting:
+            campaign = self._store.get_campaign(lead.source_job) if lead.source_job else None
+            if campaign and not campaign.send_policy.followup_days:
+                continue
+            eligible.append(lead)
+        return eligible
 
     def _in_progress_count(self, stage: Stage) -> int:
         if stage.in_progress_state not in ACTIVE_STATES:

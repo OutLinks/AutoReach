@@ -175,12 +175,14 @@ class LiveAdapter(AgentAdapter):
         config = mod.ServiceConfig.from_env()
         if ctx.campaign:
             config.campaign_instruction = ctx.campaign.instruction_for("sender")
+            config.followups_enabled = bool(ctx.campaign.send_policy.followup_days)
             config.daily_send_limit = min(
                 config.daily_send_limit, ctx.campaign.send_policy.emails_per_day
             )
             config.hourly_send_limit = min(
                 config.hourly_send_limit, ctx.campaign.send_policy.hourly_send_limit
             )
+        _relax_simulated_pacing(config, len(ctx.lead_ids))
         agent = mod.SenderAgent(config)
         await agent.run_initial(lead_ids=ctx.lead_ids)
         db = agent_output_dir("agent4-sender") / "sends.db"
@@ -189,11 +191,17 @@ class LiveAdapter(AgentAdapter):
         for lid in ctx.lead_ids:
             row = rows.get(lid)
             bounced = bool(row) and row.get("bounced")
-            result.outcomes[lid] = "bounced" if bounced else "sent"
-            if not bounced:
+            delivered = bool(row) and row.get("status") in {
+                "sent", "delivered", "opened", "clicked", "replied"
+            }
+            if bounced:
+                result.outcomes[lid] = "bounced"
+                result.failed += 1
+            elif delivered:
+                result.outcomes[lid] = "sent"
                 result.advanced_ids.append(lid)
             else:
-                result.failed += 1
+                result.outcomes[lid] = "not_sent"
         result.processed = len(ctx.lead_ids)
         result.succeeded = len(result.advanced_ids)
         return result
@@ -205,6 +213,7 @@ class LiveAdapter(AgentAdapter):
         config = mod.ServiceConfig.from_env()
         if ctx.campaign:
             config.campaign_instruction = ctx.campaign.instruction_for("sender")
+            config.followups_enabled = bool(ctx.campaign.send_policy.followup_days)
             config.daily_send_limit = min(
                 config.daily_send_limit, ctx.campaign.send_policy.emails_per_day
             )
@@ -280,6 +289,14 @@ class LiveAdapter(AgentAdapter):
 
 
 # ── Artifact reading helpers ──────────────────────────────────────────────────
+
+def _relax_simulated_pacing(config, batch_size: int) -> None:
+    """Let simulation exercise a full batch without weakening live limits."""
+    if not config.simulate:
+        return
+    config.burst_per_minute = max(config.burst_per_minute, batch_size)
+    config.min_seconds_between_same_domain = 0
+
 
 def _stream_jsonl(path: Path):
     try:

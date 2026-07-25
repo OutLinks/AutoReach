@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from core.model_selection import ModelConfig
+from core.model_selection import ModelConfig, model_config_from_env
 from core.runtime_paths import orchestrator_output_dir
 
 
@@ -120,9 +120,7 @@ class OrchestratorConfig:
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
 
     # One planner call compiles a user's request into a reusable CampaignBrief.
-    campaign_model: ModelConfig = field(default_factory=lambda: ModelConfig(
-        provider="anthropic",
-        model="claude-sonnet-4-6",
+    campaign_model: ModelConfig = field(default_factory=lambda: model_config_from_env(
         max_tokens=4096,
         temperature=0.1,
     ))

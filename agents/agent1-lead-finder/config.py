@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass, field
 
 from core.env import load_dotenv
-from core.model_selection import ModelConfig
+from core.model_selection import ModelConfig, model_config_from_env
 
 load_dotenv()
 
@@ -96,9 +96,7 @@ class ServiceConfig:
     ))
 
     # ── LLM ───────────────────────────────────────────────────────────────
-    model: ModelConfig = field(default_factory=lambda: ModelConfig(
-        provider="anthropic",
-        model="claude-sonnet-4-6",
+    model: ModelConfig = field(default_factory=lambda: model_config_from_env(
         max_tokens=4096,
         temperature=0.1,    # low temp: deterministic JSON extraction
     ))

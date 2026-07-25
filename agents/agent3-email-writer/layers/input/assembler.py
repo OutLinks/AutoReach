@@ -51,20 +51,26 @@ class InputAssembler:
         # Company profile
         company_profile = research_profile.get("company_profile") or {}
         company_summary = company_profile.get("summary", "") or ""
+        raw_data = research_profile.get("raw_data") or {}
+        website_pages = raw_data.get("website_pages") or {}
+        source_evidence = "\n".join(
+            str(content) for content in website_pages.values() if content
+        )
 
         return InputContext(
             lead_id=lead.get("id", ""),
             research_profile_id=research_profile.get("id", ""),
             lead_first_name=lead.get("first_name") or _split_name(lead)[0],
             lead_last_name=lead.get("last_name") or _split_name(lead)[1],
-            lead_title=lead.get("title", ""),
-            lead_company=lead.get("company_name", ""),
+            lead_title=lead.get("title") or "",
+            lead_company=lead.get("company_name") or "",
             company_summary=company_summary,
+            source_evidence=source_evidence[:20_000],
             pain_points_summary=pain_summary,
             personal_hooks=personal_hooks[:5],
-            recommended_hook=email_angle.get("best_hook", ""),
-            recommended_cta=email_angle.get("recommended_cta", ""),
-            recommended_tone=email_angle.get("tone", self._voice.tone),
+            recommended_hook=email_angle.get("best_hook") or "",
+            recommended_cta=email_angle.get("recommended_cta") or "",
+            recommended_tone=email_angle.get("tone") or self._voice.tone,
             subject_line_ideas=email_angle.get("subject_lines") or [],
             campaign_instruction=campaign_instruction,
             template=template,
@@ -91,6 +97,6 @@ def _format_pain_points(pain_points: list[dict]) -> str:
 
 
 def _split_name(lead: dict) -> tuple[str, str]:
-    full = lead.get("full_name", "")
+    full = lead.get("full_name") or ""
     parts = full.strip().split(" ", 1) if full else ["", ""]
     return parts[0], parts[1] if len(parts) > 1 else ""

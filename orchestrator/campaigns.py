@@ -71,10 +71,28 @@ class CampaignBrief(BaseModel):
 
     def instruction_for(self, agent: str) -> str:
         instructions = getattr(self.agent_instructions, agent)
+        proof_points = "\n".join(
+            f"- {item}" for item in self.messaging.proof_points
+        ) or "- None supplied"
+        forbidden_claims = "\n".join(
+            f"- {item}" for item in self.messaging.forbidden_claims
+        ) or "- No additional structured claims; obey the original user constraints below."
+        shared_context = (
+            "\n\nCampaign context and constraints (authoritative):\n"
+            f"{self.user_prompt}\n\n"
+            "Approved messaging proof points (closed evidence set; do not add "
+            "qualifications or outcomes):\n"
+            f"{proof_points}\n\n"
+            "Forbidden claims:\n"
+            f"{forbidden_claims}"
+        )
         if agent == "lead_finder" and self.source_urls:
             sources = "\n".join(f"- {url}" for url in self.source_urls)
-            return f"{instructions}\n\nPublic source URLs to scrape:\n{sources}"
-        return instructions
+            return (
+                f"{instructions}{shared_context}\n\n"
+                f"Public source URLs to scrape:\n{sources}"
+            )
+        return f"{instructions}{shared_context}"
 
 
 _PLANNER_SYSTEM_PROMPT = """\
