@@ -9,8 +9,25 @@ for how the whole factory runs.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
-from pathlib import Path
+
+from core.model_selection import ModelConfig, model_config_from_env
+from core.runtime_paths import orchestrator_output_dir
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return max(minimum, int(value))
 
 
 @dataclass
@@ -83,7 +100,6 @@ class ScheduleConfig:
         7: ["find"],
         8: ["research"],
         9: ["write", "send"],
-        10: ["reply"],
         18: ["followup"],
         20: ["report"],
     })
@@ -92,7 +108,7 @@ class ScheduleConfig:
 @dataclass
 class OrchestratorConfig:
     db_path: str = field(
-        default_factory=lambda: str(Path(__file__).parent / "output" / "orchestrator.db")
+        default_factory=lambda: str(orchestrator_output_dir() / "orchestrator.db")
     )
 
     targeting: TargetingConfig = field(default_factory=TargetingConfig)
@@ -103,8 +119,17 @@ class OrchestratorConfig:
     retry: RetryConfig = field(default_factory=RetryConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
 
+    # One planner call compiles a user's request into a reusable CampaignBrief.
+    campaign_model: ModelConfig = field(default_factory=lambda: model_config_from_env(
+        max_tokens=4096,
+        temperature=0.1,
+    ))
+
     # When True, the engine uses simulated adapters (no real agents / APIs run).
     simulate: bool = True
+    # Agent 5 is not part of the MVP. Enable only when reply ingestion,
+    # automated reply drafting, and human-handoff workflows are ready.
+    reply_handling_enabled: bool = False
     # Follow-up cadence threshold: a SENT lead with no reply after this many days
     # enters the follow-up stage.
     followup_after_days: int = 3
@@ -118,9 +143,30 @@ class OrchestratorConfig:
             "write": self.volume.max_concurrent_writing,
             "send": max(1, self.reputation.hourly_send_limit),
             "followup": max(1, self.reputation.hourly_send_limit),
-            "reply": 3,
+            "reply": 3 if self.reply_handling_enabled else 0,
         }
 
     @classmethod
     def from_env(cls) -> "OrchestratorConfig":
-        return cls()
+        config = cls()
+        config.simulate = _env_bool("AUTOREACH_SIMULATE", True)
+        config.reply_handling_enabled = _env_bool("AUTOREACH_REPLY_HANDLING_ENABLED", False)
+        config.followup_after_days = _env_int(
+            "AUTOREACH_FOLLOWUP_AFTER_DAYS", config.followup_after_days
+        )
+        config.volume.leads_per_day = _env_int(
+            "AUTOREACH_LEADS_PER_DAY", config.volume.leads_per_day
+        )
+        config.volume.emails_per_day = _env_int(
+            "AUTOREACH_EMAILS_PER_DAY", config.volume.emails_per_day
+        )
+        config.volume.followups_per_day = _env_int(
+            "AUTOREACH_FOLLOWUPS_PER_DAY", config.volume.followups_per_day
+        )
+        config.reputation.daily_send_limit = _env_int(
+            "AUTOREACH_DAILY_SEND_LIMIT", config.reputation.daily_send_limit
+        )
+        config.reputation.hourly_send_limit = _env_int(
+            "AUTOREACH_HOURLY_SEND_LIMIT", config.reputation.hourly_send_limit
+        )
+        return config

@@ -70,6 +70,7 @@ class FollowUpWriter:
             original_body=kw["original_body"],
             sender_name=kw["sender_name"],
             value_proposition=kw.get("value_proposition", ""),
+            campaign_instruction=self._config.campaign_instruction,
         )
         try:
             adapter = get_model(self._config.model)

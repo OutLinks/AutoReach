@@ -7,20 +7,20 @@ This is the single place to configure how AutoReach sounds and who it comes from
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
-from core.model_selection.types import ModelConfig
+from core.model_selection.types import ModelConfig, model_config_from_env
+from core.runtime_paths import agent_output_dir
 
 
 @dataclass
 class ServiceConfig:
+    # Tailored by the Orchestrator Campaign Planner for a single live run.
+    campaign_instruction: str = ""
+
     # Model
     model: ModelConfig = field(
-        default_factory=lambda: ModelConfig(
-            provider="anthropic",
-            model="claude-sonnet-4-6",
+        default_factory=lambda: model_config_from_env(
             max_tokens=4096,
             temperature=0.7,     # higher temperature for creative email writing
         )
@@ -28,9 +28,7 @@ class ServiceConfig:
 
     # Database
     db_path: str = field(
-        default_factory=lambda: str(
-            Path(__file__).parent / "output" / "emails.db"
-        )
+        default_factory=lambda: str(agent_output_dir("agent3-email-writer") / "emails.db")
     )
 
     # Concurrency

@@ -10,18 +10,19 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
-from core.model_selection.types import ModelConfig
+from core.model_selection.types import ModelConfig, model_config_from_env
+from core.runtime_paths import agent_output_dir
 
 
 @dataclass
 class ServiceConfig:
+    # Tailored by the Orchestrator Campaign Planner for a single live run.
+    campaign_instruction: str = ""
+
     # Model — used by the sequence layer to write follow-up copy.
     model: ModelConfig = field(
-        default_factory=lambda: ModelConfig(
-            provider="anthropic",
-            model="claude-sonnet-4-6",
+        default_factory=lambda: model_config_from_env(
             max_tokens=2048,
             temperature=0.7,
         )
@@ -29,14 +30,12 @@ class ServiceConfig:
 
     # Database (Agent 4's own send/tracking store)
     db_path: str = field(
-        default_factory=lambda: str(Path(__file__).parent / "output" / "sends.db")
+        default_factory=lambda: str(agent_output_dir("agent4-sender") / "sends.db")
     )
 
     # Where Agent 3 wrote its emails (the source of what we send)
     emails_db_path: str = field(
-        default_factory=lambda: str(
-            Path(__file__).parent.parent / "agent3-email-writer" / "output" / "emails.db"
-        )
+        default_factory=lambda: str(agent_output_dir("agent3-email-writer") / "emails.db")
     )
 
     # ── Layer 1: Scheduling ────────────────────────────────────────────────────
@@ -65,7 +64,9 @@ class ServiceConfig:
     )
 
     # ── Layer 2: Sending ───────────────────────────────────────────────────────
-    provider: str = "smtp"           # "instantly" | "gmail" | "outreach" | "smtp"
+    # Supported: gmail, instantly, mailgun, outreach, postmark, resend,
+    # sendgrid, ses, and smtp.
+    provider: str = "smtp"
     # When true, providers don't hit any real API — they simulate delivery so the
     # whole pipeline runs end-to-end without credentials (mirrors Agent 3 fallbacks).
     simulate: bool = True
@@ -75,10 +76,14 @@ class ServiceConfig:
     track_opens: bool = True
     track_clicks: bool = True
     tracking_pixel_base_url: str = "https://track.autoreach.local"
+    # Agent 5 is disabled for the MVP. Replies are still recorded and sequences
+    # are paused, but no Agent 5 hand-off file is created unless this is enabled.
+    reply_handoff_enabled: bool = False
 
     # ── Layer 4: Sequence ──────────────────────────────────────────────────────
     # Generate follow-up copy with the LLM; falls back to templates on failure.
     use_llm_followups: bool = True
+    followups_enabled: bool = True
 
     # ── Layer 5: Reputation ────────────────────────────────────────────────────
     bounce_rate_warning: float = 0.02
@@ -94,6 +99,13 @@ class ServiceConfig:
         cfg.provider = os.getenv("AGENT4_PROVIDER", cfg.provider)
         if os.getenv("AGENT4_SIMULATE"):
             cfg.simulate = os.getenv("AGENT4_SIMULATE", "true").lower() != "false"
+        if os.getenv("AGENT4_REPLY_HANDOFF_ENABLED"):
+            cfg.reply_handoff_enabled = (
+                os.getenv("AGENT4_REPLY_HANDOFF_ENABLED", "false").lower() == "true"
+            )
+        cfg.tracking_pixel_base_url = os.getenv(
+            "AGENT4_TRACKING_BASE_URL", cfg.tracking_pixel_base_url
+        )
         return cfg
 
     # ── Helpers ────────────────────────────────────────────────────────────────

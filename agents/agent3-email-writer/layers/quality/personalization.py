@@ -57,13 +57,17 @@ async def check(full_email: str, ctx: InputContext, config: ServiceConfig) -> Qu
         company_name=ctx.lead_company,
         pain_points_summary=ctx.pain_points_summary,
         personal_hooks=ctx.personal_hooks,
+        campaign_instruction=ctx.campaign_instruction,
     )
 
     try:
         adapter = get_model(config.model)
         response = await adapter.complete(
-            messages=[Message(role="user", content=user)],
-            system=system,
+            config.model,
+            [
+                Message(role="system", content=system),
+                Message(role="user", content=user),
+            ],
         )
         raw = (response.content or "{}").strip()
         if raw.startswith("```"):

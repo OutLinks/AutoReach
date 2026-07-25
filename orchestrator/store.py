@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .campaigns import CampaignBrief
 from .models import PipelineLead, RunRecord
 
 logger = logging.getLogger(__name__)
@@ -83,12 +84,23 @@ _SCHEMA = [
         added_at  TEXT
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS campaigns (
+        id          TEXT PRIMARY KEY,
+        user_prompt TEXT NOT NULL,
+        brief       TEXT NOT NULL,
+        status      TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    );
+    """,
 ]
 
 _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_leads_state ON leads (state);",
     "CREATE INDEX IF NOT EXISTS idx_runs_stage ON runs (stage);",
     "CREATE INDEX IF NOT EXISTS idx_events_lead ON events (lead_id);",
+    "CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns (status);",
 ]
 
 
@@ -195,6 +207,13 @@ class OrchestratorStore:
         ).fetchone()
         return row["n"] or 0
 
+    def count_events_with_note(self, note: str) -> int:
+        """Count audited outcomes by their exact transition note."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) n FROM events WHERE note = ?", (note,)
+        ).fetchone()
+        return row["n"] or 0
+
     # ── Runs (history) ─────────────────────────────────────────────────────────
 
     def record_run(self, run: RunRecord) -> None:
@@ -239,3 +258,64 @@ class OrchestratorStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    # ── Campaign briefs ───────────────────────────────────────────────────────
+
+    def save_campaign(self, brief: CampaignBrief) -> None:
+        """Persist a draft/active campaign and keep at most one active brief."""
+        brief.updated_at = datetime.utcnow()
+        with self._conn:
+            if brief.status == "active":
+                self._conn.execute("UPDATE campaigns SET status = 'draft' WHERE status = 'active'")
+            self._conn.execute(
+                """
+                INSERT OR REPLACE INTO campaigns (id, user_prompt, brief, status, created_at, updated_at)
+                VALUES (?,?,?,?,?,?)
+                """,
+                (
+                    brief.id,
+                    brief.user_prompt,
+                    brief.model_dump_json(),
+                    brief.status,
+                    _iso(brief.created_at),
+                    _iso(brief.updated_at),
+                ),
+            )
+
+    def get_campaign(self, campaign_id: str) -> Optional[CampaignBrief]:
+        row = self._conn.execute("SELECT brief, status FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+        if not row:
+            return None
+        brief = CampaignBrief.model_validate_json(row["brief"])
+        brief.status = row["status"]
+        return brief
+
+    def active_campaign(self) -> Optional[CampaignBrief]:
+        row = self._conn.execute(
+            "SELECT brief, status FROM campaigns WHERE status = 'active' ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        brief = CampaignBrief.model_validate_json(row["brief"])
+        brief.status = row["status"]
+        return brief
+
+    def list_campaigns(self, limit: int = 100, offset: int = 0) -> list[CampaignBrief]:
+        rows = self._conn.execute(
+            "SELECT brief, status FROM campaigns ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        campaigns: list[CampaignBrief] = []
+        for row in rows:
+            brief = CampaignBrief.model_validate_json(row["brief"])
+            brief.status = row["status"]
+            campaigns.append(brief)
+        return campaigns
+
+    def activate_campaign(self, campaign_id: str) -> CampaignBrief:
+        brief = self.get_campaign(campaign_id)
+        if not brief:
+            raise ValueError(f"Campaign {campaign_id} does not exist")
+        brief.status = "active"
+        self.save_campaign(brief)
+        return brief

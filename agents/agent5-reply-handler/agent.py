@@ -55,6 +55,9 @@ class ReplyHandlerAgent:
     async def run(self, job_id: Optional[str] = None) -> ReplyJob:
         """Handle every pending reply hand-off from Agent 4."""
         job_id = job_id or str(uuid4())
+        if not self._config.enabled:
+            logger.info("ReplyHandlerAgent: disabled for the MVP; skipping reply batch")
+            return self._finalize(ReplyJob(id=job_id, total=0, status="in_progress"))
         logger.info("ReplyHandlerAgent: starting job %s", job_id)
 
         replies = self._input.collect()
@@ -75,6 +78,9 @@ class ReplyHandlerAgent:
 
     async def handle_payload(self, payload: dict) -> ReplyJob:
         """Handle a single reply delivered directly (e.g. a provider webhook)."""
+        if not self._config.enabled:
+            logger.info("ReplyHandlerAgent: disabled for the MVP; skipping reply payload")
+            return self._finalize(ReplyJob(id=str(uuid4()), total=1, skipped=1, status="in_progress"))
         job = ReplyJob(id=str(uuid4()), total=1, status="in_progress")
         reply = self._input.prepare_payload(payload)
         await self._process(reply, job)

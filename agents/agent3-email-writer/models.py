@@ -73,12 +73,14 @@ class InputContext(BaseModel):
 
     # Research (from Agent 2) — only what the writers actually need
     company_summary: str = ""
+    source_evidence: str = ""              # direct scraped text, not LLM analysis
     pain_points_summary: str = ""         # top 1-2 pain points as plain text
     personal_hooks: list[str] = []        # specific referenceable details
     recommended_hook: str = ""            # from email_angle.best_hook
     recommended_cta: str = ""             # from email_angle.recommended_cta
     recommended_tone: str = ""            # from email_angle.tone
     subject_line_ideas: list[str] = []    # from email_angle.subject_lines
+    campaign_instruction: str = ""
 
     # Config
     template: EmailTemplate

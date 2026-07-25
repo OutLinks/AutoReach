@@ -44,6 +44,7 @@ from .types import (
     ToolCall,
     ToolDefinition,
     Usage,
+    model_config_from_env,
 )
 
 # Re-export the base class for type hints / subclassing
@@ -77,6 +78,7 @@ __all__ = [
     "ToolCall",
     "ToolDefinition",
     "Usage",
+    "model_config_from_env",
     # Base
     "ProviderAdapter",
     # Registry

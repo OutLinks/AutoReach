@@ -17,11 +17,11 @@ import sqlite3
 from pathlib import Path
 from typing import Generator, Optional
 
+from core.runtime_paths import agent_output_dir
+
 logger = logging.getLogger(__name__)
 
-_AGENT1_OUTPUT_DIR = (
-    Path(__file__).parent.parent.parent / "agent1-lead-finder" / "output"
-)
+_AGENT1_OUTPUT_DIR = agent_output_dir("agent1-lead-finder")
 
 
 class EmailReader:

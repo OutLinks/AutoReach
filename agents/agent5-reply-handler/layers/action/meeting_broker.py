@@ -45,6 +45,7 @@ class MeetingBroker:
                 sender_name=self._config.sender_name,
                 calendly_link=link,
                 guidance="They're interested. Be warm and brief, and include the booking link.",
+                campaign_instruction=self._config.campaign_instruction,
             )
             try:
                 adapter = get_model(self._config.model)

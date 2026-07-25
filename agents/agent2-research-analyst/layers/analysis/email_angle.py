@@ -30,7 +30,9 @@ logger = logging.getLogger(__name__)
 
 class EmailAngleStrategist:
     def __init__(self, config: ServiceConfig) -> None:
+        self._model = config.model
         self._adapter = get_model(config.model)
+        self._campaign_instruction = config.campaign_instruction
 
     async def strategize(
         self,
@@ -39,6 +41,7 @@ class EmailAngleStrategist:
         company_profile: Optional[CompanyProfile],
         pain_points: list[PainPoint],
         personal_profile: Optional[PersonalProfile],
+        campaign_instruction: str = "",
     ) -> Optional[EmailAngle]:
         if not company_profile and not pain_points:
             logger.debug(
@@ -54,13 +57,17 @@ class EmailAngleStrategist:
         )
 
         system, user = build_email_angle_prompt(
-            lead_name, company_name, company_json, pain_json, personal_json
+            lead_name, company_name, company_json, pain_json, personal_json,
+            campaign_instruction or self._campaign_instruction,
         )
 
         try:
             response = await self._adapter.complete(
-                messages=[Message(role="user", content=user)],
-                system=system,
+                self._model,
+                [
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
             )
             raw = response.content or ""
             return EmailAngle(**self._parse(raw))

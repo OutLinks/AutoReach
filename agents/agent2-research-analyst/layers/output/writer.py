@@ -29,6 +29,7 @@ class OutputWriter:
         is_valid, reason = validate(profile)
 
         if is_valid:
+            profile.mark_complete()
             self._store.write(profile)
             self._written += 1
             job.completed += 1

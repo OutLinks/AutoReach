@@ -64,12 +64,15 @@ class SenderProfileLoader:
         company = os.getenv("SENDER_COMPANY", "")
         email = os.getenv("SENDER_EMAIL", "")
 
-        if not all([first, last, company, email]):
+        if not all([first, last, email]):
             return None
 
+        default_signature = "\n".join(
+            part for part in (f"{first} {last}", title, company) if part
+        )
         signature = os.getenv(
             "SENDER_SIGNATURE",
-            f"{first} {last}\n{title}\n{company}",
+            default_signature,
         )
 
         return SenderProfile(

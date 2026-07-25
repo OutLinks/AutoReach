@@ -8,6 +8,7 @@ of the system never branches on which LLM is being used.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -104,3 +105,22 @@ class ModelConfig:
     temperature: float | None = 0.7
     timeout: float = 60.0
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+def model_config_from_env(
+    *,
+    max_tokens: int,
+    temperature: float | None,
+    default_provider: str = "anthropic",
+    default_model: str = "claude-sonnet-4-6",
+) -> ModelConfig:
+    """Build a model config with optional process-wide provider overrides."""
+    configured_max = os.getenv("AUTOREACH_LLM_MAX_TOKENS", "").strip()
+    if configured_max:
+        max_tokens = min(max_tokens, max(1, int(configured_max)))
+    return ModelConfig(
+        provider=os.getenv("AUTOREACH_LLM_PROVIDER", default_provider).strip(),
+        model=os.getenv("AUTOREACH_LLM_MODEL", default_model).strip(),
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )

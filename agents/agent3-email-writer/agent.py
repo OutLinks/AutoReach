@@ -127,7 +127,9 @@ class EmailWriterAgent:
 
         try:
             # Layer 1: assemble input context
-            ctx = self._assembler.assemble(research_profile, lead)
+            ctx = self._assembler.assemble(
+                research_profile, lead, self._config.campaign_instruction
+            )
 
             # Layer 2: write the email
             draft = await self._writing.write(ctx)

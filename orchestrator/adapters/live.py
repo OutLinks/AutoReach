@@ -21,9 +21,12 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
+from core.runtime_paths import agent_output_dir
 
 from ..config import OrchestratorConfig
+from ..campaigns import CampaignBrief
 from ..models import DISCOVERED, PipelineLead, REPLIED, SENT, FOLLOWING_UP, StageResult
 from ..state_machine import FIND, FOLLOWUP, REPLY, RESEARCH, SEND, WRITE, Stage
 from ..store import OrchestratorStore
@@ -75,17 +78,27 @@ class LiveAdapter(AgentAdapter):
     async def _find(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent1-lead-finder", "agent1_lead_finder")
         agent = mod.LeadFinderAgent(mod.ServiceConfig())
-        await agent.run(ctx.config.targeting.search_prompt)
+        search_request = (
+            ctx.campaign.instruction_for("lead_finder")
+            if ctx.campaign
+            else ctx.config.targeting.search_prompt
+        )
+        await agent.run(search_request)
         # Ingest whatever new leads landed in Agent 1's output.
-        added = await self._ingest_new_leads(ctx.store, ctx.now)
+        added = await self._ingest_new_leads(ctx.store, ctx.now, ctx.campaign)
         return StageResult(
             stage=self.stage.name, agent=self.stage.agent,
             processed=added, succeeded=added, new_lead_ids=[],
         )
 
-    async def _ingest_new_leads(self, store: OrchestratorStore, now: datetime) -> int:
-        out = _AGENTS_DIR / "agent1-lead-finder" / "output"
-        known = {l.id for l in store.all_leads()}
+    async def _ingest_new_leads(
+        self,
+        store: OrchestratorStore,
+        now: datetime,
+        campaign: CampaignBrief | None = None,
+    ) -> int:
+        out = agent_output_dir("agent1-lead-finder")
+        known = {lead.id for lead in store.all_leads()}
         added = 0
         for path in sorted(out.glob("leads_*.jsonl")):
             for lead in _stream_jsonl(path):
@@ -99,6 +112,8 @@ class LiveAdapter(AgentAdapter):
                     industry=lead.get("industry") or "",
                     quality_score=(lead.get("lead_score") or 0.0) / 100.0,
                     discovered_at=now,
+                    source_job=campaign.id if campaign else "",
+                    metadata={"campaign_id": campaign.id} if campaign else {},
                 ))
                 known.add(lid)
                 added += 1
@@ -109,10 +124,13 @@ class LiveAdapter(AgentAdapter):
 
     async def _research(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent2-research-analyst", "agent2_research_analyst")
-        agent = mod.ResearchAgent(mod.ServiceConfig())
+        config = mod.ServiceConfig()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("research_analyst")
+        agent = mod.ResearchAgent(config)
         await agent.run(lead_ids=ctx.lead_ids)
         # Reconcile from research JSONL: status complete/partial → ok.
-        out = _AGENTS_DIR / "agent2-research-analyst" / "output"
+        out = agent_output_dir("agent2-research-analyst")
         statuses = _index_jsonl(out.glob("research_*.jsonl"), key="lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -130,9 +148,12 @@ class LiveAdapter(AgentAdapter):
 
     async def _write(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent3-email-writer", "agent3_email_writer")
-        agent = mod.EmailWriterAgent(mod.ServiceConfig())
+        config = mod.ServiceConfig()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("email_writer")
+        agent = mod.EmailWriterAgent(config)
         await agent.run(lead_ids=ctx.lead_ids)
-        db = _AGENTS_DIR / "agent3-email-writer" / "output" / "emails.db"
+        db = agent_output_dir("agent3-email-writer") / "emails.db"
         rows = _read_db(db, "SELECT lead_id, status, quality_score FROM emails", "lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -151,19 +172,36 @@ class LiveAdapter(AgentAdapter):
 
     async def _send(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent4-sender", "agent4_sender")
-        agent = mod.SenderAgent(mod.ServiceConfig.from_env())
+        config = mod.ServiceConfig.from_env()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("sender")
+            config.followups_enabled = bool(ctx.campaign.send_policy.followup_days)
+            config.daily_send_limit = min(
+                config.daily_send_limit, ctx.campaign.send_policy.emails_per_day
+            )
+            config.hourly_send_limit = min(
+                config.hourly_send_limit, ctx.campaign.send_policy.hourly_send_limit
+            )
+        _relax_simulated_pacing(config, len(ctx.lead_ids))
+        agent = mod.SenderAgent(config)
         await agent.run_initial(lead_ids=ctx.lead_ids)
-        db = _AGENTS_DIR / "agent4-sender" / "output" / "sends.db"
+        db = agent_output_dir("agent4-sender") / "sends.db"
         rows = _read_db(db, "SELECT lead_id, status, bounced FROM sent_emails", "lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
             row = rows.get(lid)
             bounced = bool(row) and row.get("bounced")
-            result.outcomes[lid] = "bounced" if bounced else "sent"
-            if not bounced:
+            delivered = bool(row) and row.get("status") in {
+                "sent", "delivered", "opened", "clicked", "replied"
+            }
+            if bounced:
+                result.outcomes[lid] = "bounced"
+                result.failed += 1
+            elif delivered:
+                result.outcomes[lid] = "sent"
                 result.advanced_ids.append(lid)
             else:
-                result.failed += 1
+                result.outcomes[lid] = "not_sent"
         result.processed = len(ctx.lead_ids)
         result.succeeded = len(result.advanced_ids)
         return result
@@ -172,7 +210,17 @@ class LiveAdapter(AgentAdapter):
 
     async def _followup(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent4-sender", "agent4_sender")
-        agent = mod.SenderAgent(mod.ServiceConfig.from_env())
+        config = mod.ServiceConfig.from_env()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("sender")
+            config.followups_enabled = bool(ctx.campaign.send_policy.followup_days)
+            config.daily_send_limit = min(
+                config.daily_send_limit, ctx.campaign.send_policy.emails_per_day
+            )
+            config.hourly_send_limit = min(
+                config.hourly_send_limit, ctx.campaign.send_policy.hourly_send_limit
+            )
+        agent = mod.SenderAgent(config)
         await agent.run_followups()
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -185,9 +233,12 @@ class LiveAdapter(AgentAdapter):
 
     async def _reply(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent5-reply-handler", "agent5_reply_handler")
-        agent = mod.ReplyHandlerAgent(mod.ServiceConfig.from_env())
+        config = mod.ServiceConfig.from_env()
+        if ctx.campaign:
+            config.campaign_instruction = ctx.campaign.instruction_for("reply_handler")
+        agent = mod.ReplyHandlerAgent(config)
         await agent.run()
-        db = _AGENTS_DIR / "agent5-reply-handler" / "output" / "conversations.db"
+        db = agent_output_dir("agent5-reply-handler") / "conversations.db"
         rows = _read_db(db, "SELECT id, status, escalated FROM conversations", "id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -216,7 +267,7 @@ class LiveAdapter(AgentAdapter):
         if self.stage.name != REPLY.name:
             return 0
         now = now or datetime.now(timezone.utc)
-        replies_dir = _AGENTS_DIR / "agent4-sender" / "output" / "replies"
+        replies_dir = agent_output_dir("agent4-sender") / "replies"
         if not replies_dir.exists():
             return 0
         flipped = 0
@@ -238,6 +289,14 @@ class LiveAdapter(AgentAdapter):
 
 
 # ── Artifact reading helpers ──────────────────────────────────────────────────
+
+def _relax_simulated_pacing(config, batch_size: int) -> None:
+    """Let simulation exercise a full batch without weakening live limits."""
+    if not config.simulate:
+        return
+    config.burst_per_minute = max(config.burst_per_minute, batch_size)
+    config.min_seconds_between_same_domain = 0
+
 
 def _stream_jsonl(path: Path):
     try:

@@ -1,0 +1,14 @@
+.git
+.context
+.conductor
+.venv
+.env
+.env.*
+!.env.example
+.data
+**/__pycache__
+**/*.pyc
+api/output
+orchestrator/output
+agents/*/output
+tests

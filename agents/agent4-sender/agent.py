@@ -3,11 +3,12 @@ Agent 4: Sender + Follow-Up Manager
 
 Reads approved emails from Agent 3, sends them at the right time through the
 right account, tracks engagement, runs the 4-touch follow-up sequence, and
-protects sender reputation — notifying Agent 5 the moment a lead replies.
+protects sender reputation — pausing follow-ups when a lead replies and,
+when enabled, notifying Agent 5.
 
 Five-layer pipeline:
   Layer 1 — Scheduling  : timezone → send-time → volume → warm-up → ScheduledSend
-  Layer 2 — Sending     : Instantly / Gmail / Outreach / SMTP (account rotation)
+  Layer 2 — Sending     : pluggable email APIs or SMTP (account rotation)
   Layer 3 — Tracking    : delivery, open, click, reply
   Layer 4 — Sequence    : day0 → day3 → day7 → day14 breakup (state machine)
   Layer 5 — Reputation  : bounce, complaint, spam-trap, sender-score (pause gate)
@@ -19,7 +20,7 @@ server / provider webhooks call:
     await agent.run_initial()     # send day-0 emails for all approved leads
     await agent.run_followups()   # send any follow-ups that are now due
 
-    agent.handle_reply(sent_id, "looks interesting")   # → notifies Agent 5
+    agent.handle_reply(sent_id, "looks interesting")   # → pauses follow-ups
     agent.handle_bounce(sent_id, "hard")
     agent.handle_complaint(sent_id)
 """
@@ -100,9 +101,19 @@ class SenderAgent:
     async def _send_initial(self, email: dict, job: SendJob) -> None:
         recipient = email.get("recipient", "")
         if not recipient:
-            logger.warning("SenderAgent: no recipient for email %s — skipping", email.get("id"))
-            job.skipped += 1
-            return
+            if self._config.simulate:
+                correlation_id = email.get("lead_id") or email.get("id") or "unknown"
+                recipient = f"simulated@{correlation_id}.invalid"
+                logger.info(
+                    "SenderAgent[sim]: using a non-routable recipient for email %s",
+                    email.get("id"),
+                )
+            else:
+                logger.warning(
+                    "SenderAgent: no recipient for email %s — skipping", email.get("id")
+                )
+                job.skipped += 1
+                return
 
         allowed, reason = self._reputation.can_email(recipient)
         if not allowed:
@@ -110,7 +121,10 @@ class SenderAgent:
             job.suppressed += 1
             return
 
-        scheduled = self._scheduling.schedule(email, step=STEP_DAY0)
+        scheduled = self._scheduling.schedule(
+            {**email, "recipient": recipient},
+            step=STEP_DAY0,
+        )
         if scheduled is None:
             job.skipped += 1  # no account capacity → queue for next run
             return
@@ -132,15 +146,16 @@ class SenderAgent:
             return
 
         job.sent += 1
-        # Kick off the follow-up sequence from this send.
-        self._sequence.start(
-            lead_id=sent.lead_id,
-            email_id=sent.email_id,
-            sent_at=sent.sent_at or datetime.now(timezone.utc),
-            recipient=recipient,
-            account_email=scheduled.account_email,
-            timezone_name=scheduled.timezone,
-        )
+        if self._config.followups_enabled:
+            # Kick off the follow-up sequence only when the campaign permits it.
+            self._sequence.start(
+                lead_id=sent.lead_id,
+                email_id=sent.email_id,
+                sent_at=sent.sent_at or datetime.now(timezone.utc),
+                recipient=recipient,
+                account_email=scheduled.account_email,
+                timezone_name=scheduled.timezone,
+            )
 
     # ── Batch: follow-ups ──────────────────────────────────────────────────────
 
@@ -153,6 +168,11 @@ class SenderAgent:
         job_id = job_id or str(uuid4())
         now = now or datetime.now(timezone.utc)
         logger.info("SenderAgent: starting follow-up job %s", job_id)
+
+        if not self._config.followups_enabled:
+            return self._finalize(
+                SendJob(id=job_id, kind="followups", total=0, status="in_progress")
+            )
 
         due = self._sequence.due(now)
         job = SendJob(id=job_id, kind="followups", total=len(due), status="in_progress")
@@ -279,7 +299,7 @@ class SenderAgent:
     # ── Event hooks (called by webhooks / tracking server) ─────────────────────
 
     def handle_reply(self, sent_email_id: str, snippet: str = "") -> Optional[ReplyNotification]:
-        """A reply arrived → pause the sequence and hand off to Agent 5."""
+        """A reply arrived → pause the sequence and optionally hand off to Agent 5."""
         notification = self._tracking.record_reply(sent_email_id, snippet)
         if notification:
             self._sequence.pause_on_reply(notification.lead_id)

@@ -13,6 +13,8 @@ import json
 import logging
 from pathlib import Path
 
+from core.runtime_paths import agent_output_dir
+
 from ...models import Notification
 from ...storage.conversation_store import ConversationStore
 
@@ -22,9 +24,7 @@ logger = logging.getLogger(__name__)
 class Notifier:
     def __init__(self, store: ConversationStore, notifications_dir: Path | None = None) -> None:
         self._store = store
-        self._dir = notifications_dir or (
-            Path(__file__).parent.parent.parent / "output" / "notifications"
-        )
+        self._dir = notifications_dir or agent_output_dir("agent5-reply-handler") / "notifications"
 
     def notify(self, notification: Notification) -> None:
         self._store.add_notification(notification)

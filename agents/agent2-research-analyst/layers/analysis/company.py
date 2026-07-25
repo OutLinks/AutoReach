@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 class CompanyAnalyzer:
     def __init__(self, config: ServiceConfig) -> None:
+        self._model = config.model
         self._adapter = get_model(config.model)
+        self._campaign_instruction = config.campaign_instruction
 
     async def analyze(
         self,
@@ -31,12 +33,17 @@ class CompanyAnalyzer:
         company_name: str,
         data: RawResearchData,
     ) -> Optional[CompanyProfile]:
-        system, user = build_company_profile_prompt(lead_name, company_name, data)
+        system, user = build_company_profile_prompt(
+            lead_name, company_name, data, self._campaign_instruction
+        )
 
         try:
             response = await self._adapter.complete(
-                messages=[Message(role="user", content=user)],
-                system=system,
+                self._model,
+                [
+                    Message(role="system", content=system),
+                    Message(role="user", content=user),
+                ],
             )
             raw = response.content or ""
             return CompanyProfile(**self._parse(raw))

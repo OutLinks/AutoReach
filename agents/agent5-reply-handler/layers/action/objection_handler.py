@@ -61,6 +61,7 @@ class ObjectionHandler:
             reply, label, strategy,
             sender_name=self._config.sender_name,
             calendly_link=self._config.calendly_link,
+            campaign_instruction=self._config.campaign_instruction,
         )
         try:
             adapter = get_model(self._config.model)

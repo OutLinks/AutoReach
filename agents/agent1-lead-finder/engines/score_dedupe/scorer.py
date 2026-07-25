@@ -101,7 +101,7 @@ class LeadScorer:
         score_map = {"valid": 20.0, "catch-all": 12.0, "unknown": 5.0, "invalid": -5.0}
         base = score_map.get(status, 5.0)
 
-        # Boost for high Hunter.io score
+        # Boost for high verifier confidence
         if lead.email_score and lead.email_score >= 80:
             base = min(base + 5, 20.0)
 

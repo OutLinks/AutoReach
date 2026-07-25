@@ -25,7 +25,9 @@ def _context_block(reply: IncomingReply) -> str:
 
 # ── Intent classification ─────────────────────────────────────────────────────
 
-def build_intent_prompt(reply: IncomingReply) -> tuple[str, str]:
+def build_intent_prompt(
+    reply: IncomingReply, campaign_instruction: str = ""
+) -> tuple[str, str]:
     intents = ", ".join(ALL_INTENTS)
     system = (
         "You are a sales-reply classifier. Read the lead's reply and classify the "
@@ -47,7 +49,7 @@ def build_intent_prompt(reply: IncomingReply) -> tuple[str, str]:
         "Respond with JSON only:\n"
         '{"intent": "QUESTION", "confidence": 0.0-1.0, "reasoning": "one sentence"}'
     )
-    return system, _context_block(reply)
+    return system, f"{_context_block(reply)}\n\nCampaign instructions: {campaign_instruction or 'n/a'}"
 
 
 # ── Auto-reply generation ─────────────────────────────────────────────────────
@@ -59,6 +61,7 @@ def build_reply_prompt(
     sender_name: str,
     calendly_link: str = "",
     guidance: str = "",
+    campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
         "You are writing a short, warm, human reply to a sales lead's response. "
@@ -73,7 +76,8 @@ def build_reply_prompt(
     link = f"\nMeeting link to include if relevant: {calendly_link}" if calendly_link else ""
     user = (
         f"{_context_block(reply)}\n"
-        f"Sender name (sign as this): {sender_name}{link}\n\n"
+        f"Sender name (sign as this): {sender_name}{link}\n"
+        f"Campaign reply instructions: {campaign_instruction or 'n/a'}\n\n"
         "Write the reply now."
     )
     return system, user
@@ -88,6 +92,7 @@ def build_objection_prompt(
     *,
     sender_name: str,
     calendly_link: str = "",
+    campaign_instruction: str = "",
 ) -> tuple[str, str]:
     system = (
         "You are a thoughtful sales rep replying to an objection. Acknowledge the "
@@ -101,7 +106,8 @@ def build_objection_prompt(
     link = f"\nMeeting link: {calendly_link}" if calendly_link else ""
     user = (
         f"{_context_block(reply)}\n"
-        f"Sender name (sign as this): {sender_name}{link}\n\n"
+        f"Sender name (sign as this): {sender_name}{link}\n"
+        f"Campaign reply instructions: {campaign_instruction or 'n/a'}\n\n"
         "Write the objection-handling reply now."
     )
     return system, user
