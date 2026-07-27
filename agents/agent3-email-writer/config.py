@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from core.model_selection.types import ModelConfig, model_config_from_env
-from core.runtime_paths import agent_output_dir
+from core.runtime_paths import agent_output_dir, configured_database_path
 
 
 @dataclass
@@ -28,7 +28,10 @@ class ServiceConfig:
 
     # Database
     db_path: str = field(
-        default_factory=lambda: str(agent_output_dir("agent3-email-writer") / "emails.db")
+        default_factory=lambda: str(
+            configured_database_path()
+            or (agent_output_dir("agent3-email-writer") / "emails.db")
+        )
     )
 
     # Concurrency

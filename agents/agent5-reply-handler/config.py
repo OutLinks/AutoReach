@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass, field
 
 from core.model_selection.types import ModelConfig, model_config_from_env
-from core.runtime_paths import agent_output_dir
+from core.runtime_paths import agent_output_dir, configured_database_path
 
 
 @dataclass
@@ -33,7 +33,10 @@ class ServiceConfig:
 
     # Agent 5's own conversation store.
     db_path: str = field(
-        default_factory=lambda: str(agent_output_dir("agent5-reply-handler") / "conversations.db")
+        default_factory=lambda: str(
+            configured_database_path()
+            or (agent_output_dir("agent5-reply-handler") / "conversations.db")
+        )
     )
 
     # Where Agent 4 drops reply hand-off files.
@@ -43,7 +46,10 @@ class ServiceConfig:
 
     # Agent 3's emails DB — for the original email content (conversation context).
     emails_db_path: str = field(
-        default_factory=lambda: str(agent_output_dir("agent3-email-writer") / "emails.db")
+        default_factory=lambda: str(
+            configured_database_path()
+            or (agent_output_dir("agent3-email-writer") / "emails.db")
+        )
     )
 
     # Where to drop "stop sequence" signals Agent 4 can pick up.

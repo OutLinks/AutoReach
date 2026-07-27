@@ -1,4 +1,4 @@
-"""Environment-backed settings for the HTTP backend."""
+"""Process bootstrap settings; user-facing runtime settings live in SQLite."""
 
 from __future__ import annotations
 
@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from core.runtime_paths import api_output_dir, data_root
+from core.runtime_paths import data_root
+
+
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parents[1] / ".data"
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -20,8 +23,7 @@ def _bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class AppSettings:
     environment: str = "development"
-    api_secret: str = ""
-    data_dir: Path = field(default_factory=lambda: data_root() or api_output_dir().parent)
+    data_dir: Path = field(default_factory=lambda: data_root() or _DEFAULT_DATA_DIR)
     scheduler_enabled: bool = False
     scheduler_interval_seconds: int = 30
     scheduler_timezone: str = "UTC"
@@ -32,8 +34,6 @@ class AppSettings:
         return self.data_dir / "api" / "jobs.db"
 
     def validate(self) -> None:
-        if self.environment == "production" and len(self.api_secret) < 24:
-            raise ValueError("AUTOREACH_API_SECRET must contain at least 24 characters in production")
         if self.scheduler_interval_seconds < 5:
             raise ValueError("AUTOREACH_SCHEDULER_INTERVAL_SECONDS must be at least 5")
         try:
@@ -45,7 +45,7 @@ class AppSettings:
 
     @classmethod
     def from_env(cls) -> "AppSettings":
-        root = data_root() or api_output_dir().parent
+        root = data_root() or _DEFAULT_DATA_DIR
         origins = tuple(
             item.strip()
             for item in os.getenv("AUTOREACH_CORS_ORIGINS", "").split(",")
@@ -53,7 +53,6 @@ class AppSettings:
         )
         settings = cls(
             environment=os.getenv("AUTOREACH_ENV", "development").strip().lower(),
-            api_secret=os.getenv("AUTOREACH_API_SECRET", ""),
             data_dir=root,
             scheduler_enabled=_bool("AUTOREACH_SCHEDULER_ENABLED", False),
             scheduler_interval_seconds=int(

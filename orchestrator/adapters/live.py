@@ -105,6 +105,13 @@ class LiveAdapter(AgentAdapter):
                 lid = lead.get("id")
                 if not lid or lid in known:
                     continue
+                store.save_artifact(
+                    artifact_id=f"lead-discovery:{lid}",
+                    kind="lead_discovery",
+                    lead_id=lid,
+                    source_job=campaign.id if campaign else "",
+                    payload=lead,
+                )
                 store.upsert_lead(PipelineLead(
                     id=lid, state=DISCOVERED,
                     email=lead.get("email") or "",
@@ -136,6 +143,14 @@ class LiveAdapter(AgentAdapter):
         for lid in ctx.lead_ids:
             profile = statuses.get(lid)
             ok = bool(profile) and profile.get("status") in ("complete", "partial")
+            if profile:
+                ctx.store.save_artifact(
+                    artifact_id=f"research-profile:{lid}",
+                    kind="research_profile",
+                    lead_id=lid,
+                    source_job=ctx.campaign.id if ctx.campaign else "",
+                    payload=profile,
+                )
             result.outcomes[lid] = "ok" if ok else "incomplete"
             if ok:
                 result.advanced_ids.append(lid)
@@ -149,11 +164,12 @@ class LiveAdapter(AgentAdapter):
     async def _write(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent3-email-writer", "agent3_email_writer")
         config = mod.ServiceConfig()
+        config.db_path = ctx.config.db_path
         if ctx.campaign:
             config.campaign_instruction = ctx.campaign.instruction_for("email_writer")
         agent = mod.EmailWriterAgent(config)
         await agent.run(lead_ids=ctx.lead_ids)
-        db = agent_output_dir("agent3-email-writer") / "emails.db"
+        db = Path(ctx.config.db_path)
         rows = _read_db(db, "SELECT lead_id, status, quality_score FROM emails", "lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -173,6 +189,8 @@ class LiveAdapter(AgentAdapter):
     async def _send(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent4-sender", "agent4_sender")
         config = mod.ServiceConfig.from_env()
+        config.db_path = ctx.config.db_path
+        config.emails_db_path = ctx.config.db_path
         if ctx.campaign:
             config.campaign_instruction = ctx.campaign.instruction_for("sender")
             config.followups_enabled = bool(ctx.campaign.send_policy.followup_days)
@@ -185,7 +203,7 @@ class LiveAdapter(AgentAdapter):
         _relax_simulated_pacing(config, len(ctx.lead_ids))
         agent = mod.SenderAgent(config)
         await agent.run_initial(lead_ids=ctx.lead_ids)
-        db = agent_output_dir("agent4-sender") / "sends.db"
+        db = Path(ctx.config.db_path)
         rows = _read_db(db, "SELECT lead_id, status, bounced FROM sent_emails", "lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
@@ -211,6 +229,8 @@ class LiveAdapter(AgentAdapter):
     async def _followup(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent4-sender", "agent4_sender")
         config = mod.ServiceConfig.from_env()
+        config.db_path = ctx.config.db_path
+        config.emails_db_path = ctx.config.db_path
         if ctx.campaign:
             config.campaign_instruction = ctx.campaign.instruction_for("sender")
             config.followups_enabled = bool(ctx.campaign.send_policy.followup_days)
@@ -234,11 +254,13 @@ class LiveAdapter(AgentAdapter):
     async def _reply(self, ctx: StageContext) -> StageResult:
         mod = _load_agent("agent5-reply-handler", "agent5_reply_handler")
         config = mod.ServiceConfig.from_env()
+        config.db_path = ctx.config.db_path
+        config.emails_db_path = ctx.config.db_path
         if ctx.campaign:
             config.campaign_instruction = ctx.campaign.instruction_for("reply_handler")
         agent = mod.ReplyHandlerAgent(config)
         await agent.run()
-        db = agent_output_dir("agent5-reply-handler") / "conversations.db"
+        db = Path(ctx.config.db_path)
         rows = _read_db(db, "SELECT id, status, escalated FROM conversations", "id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:

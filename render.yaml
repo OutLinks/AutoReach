@@ -15,34 +15,7 @@ services:
     envVars:
       - key: AUTOREACH_ENV
         value: production
-      - key: AUTOREACH_API_SECRET
-        generateValue: true
       - key: AUTOREACH_DATA_DIR
         value: /data
-      - key: AUTOREACH_SIMULATE
-        value: true
-      - key: AUTOREACH_REPLY_HANDLING_ENABLED
-        value: false
-      - key: AUTOREACH_SCHEDULER_ENABLED
-        value: true
-      - key: AUTOREACH_SCHEDULER_TIMEZONE
-        value: Asia/Colombo
-      - key: AGENT4_SIMULATE
-        value: true
-      - key: AGENT5_ENABLED
-        value: false
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: autoreach-key-value
-          property: connectionString
-      - key: ANTHROPIC_API_KEY
-        sync: false
-
-  - type: keyvalue
-    name: autoreach-key-value
-    plan: starter
-    region: singapore
-    ipAllowList: []
-    maxmemoryPolicy: noeviction
-    persistenceMode: journal-snapshot
+      - key: AUTOREACH_SCHEDULER_INTERVAL_SECONDS
+        value: 30
