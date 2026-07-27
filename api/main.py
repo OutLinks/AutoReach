@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -14,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from orchestrator import Orchestrator, OrchestratorConfig
+from orchestrator.models import DISCOVERED, PipelineLead
 from orchestrator.state_machine import STAGE_BY_NAME
 
 from .config_store import ConfigStore, DatabaseLocator
@@ -21,6 +23,7 @@ from .executor import JobExecutor
 from .jobs import JobRecord, JobStore
 from .scheduler import HourlyScheduler
 from .settings import AppSettings
+from .workflows import WorkflowStore
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,92 @@ class AgentRunRequest(BaseModel):
     stage: str | None = None
 
 
+class AcceptedJob(BaseModel):
+    job_id: str
+
+
+class ResearchSection(BaseModel):
+    heading: str = Field(min_length=1, max_length=500)
+    body: str = Field(default="", max_length=100_000)
+
+
+class ResearchSource(BaseModel):
+    title: str = Field(min_length=1, max_length=1_000)
+    url: str = Field(min_length=1, max_length=4_000)
+
+
+class ResearchCreateRequest(BaseModel):
+    lead_id: str | None = Field(default=None, min_length=1, max_length=200)
+    company: str | None = Field(default=None, min_length=1, max_length=500)
+    prompt: str | None = Field(default=None, max_length=20_000)
+
+
+class ResearchPatchRequest(BaseModel):
+    lead_id: str | None = Field(default=None, min_length=1, max_length=200)
+    company: str | None = Field(default=None, min_length=1, max_length=500)
+    summary: str | None = Field(default=None, max_length=100_000)
+    sections: list[ResearchSection] | None = None
+    sources: list[ResearchSource] | None = None
+
+
+class ResearchIterateRequest(BaseModel):
+    instructions: str = Field(min_length=1, max_length=20_000)
+
+
+class EmailDraftCreateRequest(BaseModel):
+    lead_id: str = Field(min_length=1, max_length=200)
+    campaign_id: str = Field(min_length=1, max_length=200)
+    tone: str | None = Field(default=None, max_length=100)
+    instructions: str | None = Field(default=None, max_length=20_000)
+
+
+class EmailDraftPatchRequest(BaseModel):
+    subject: str | None = Field(default=None, min_length=1, max_length=1_000)
+    body: str | None = Field(default=None, min_length=1, max_length=100_000)
+
+
+class EmailRegenerateRequest(BaseModel):
+    instructions: str | None = Field(default=None, max_length=20_000)
+
+
+class MailboxReplyRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=100_000)
+    subject: str | None = Field(default=None, min_length=1, max_length=1_000)
+
+
+class LeadSearchFilters(BaseModel):
+    industry: str | None = Field(default=None, max_length=500)
+    location: str | None = Field(default=None, max_length=500)
+    size: str | None = Field(default=None, max_length=100)
+
+
+class LeadSearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=20_000)
+    filters: LeadSearchFilters = Field(default_factory=LeadSearchFilters)
+    limit: int = Field(default=25, ge=1, le=200)
+
+
+class LeadImportRequest(BaseModel):
+    lead_ids: list[str] = Field(min_length=1, max_length=500)
+
+
+class OrchestratorMessageContext(BaseModel):
+    campaign_id: str | None = Field(default=None, max_length=200)
+    lead_id: str | None = Field(default=None, max_length=200)
+
+
+class OrchestratorMessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=20_000)
+    context: OrchestratorMessageContext | None = None
+
+
+def _validation_error(field: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail=[{"loc": ["body", field], "msg": message}],
+    )
+
+
 def create_app(
     settings: AppSettings | None = None,
     orchestrator_factory: Callable[[OrchestratorConfig], Orchestrator] = Orchestrator,
@@ -78,6 +167,7 @@ def create_app(
         executor = getattr(application.state, "executor", None)
         orchestrator = getattr(application.state, "orchestrator", None)
         job_store = getattr(application.state, "job_store", None)
+        workflow_store = getattr(application.state, "workflow_store", None)
         if scheduler is not None:
             await scheduler.stop()
         if executor is not None:
@@ -86,6 +176,8 @@ def create_app(
             orchestrator.store.close()
         if job_store is not None:
             job_store.close()
+        if workflow_store is not None:
+            workflow_store.close()
 
     async def start_runtime(
         application: FastAPI,
@@ -97,7 +189,8 @@ def create_app(
         config.db_path = str(database_path)
         orchestrator = orchestrator_factory(config)
         job_store = JobStore(database_path)
-        executor = JobExecutor(job_store, orchestrator)
+        workflow_store = WorkflowStore(database_path)
+        executor = JobExecutor(job_store, orchestrator, workflow_store)
         scheduler = HourlyScheduler(
             executor,
             config_store.get("scheduler_timezone"),
@@ -107,6 +200,7 @@ def create_app(
         application.state.config_store = config_store
         application.state.orchestrator = orchestrator
         application.state.job_store = job_store
+        application.state.workflow_store = workflow_store
         application.state.executor = executor
         application.state.scheduler = scheduler
         await executor.start()
@@ -155,10 +249,15 @@ def create_app(
             "openapi": "/openapi.json",
             "health": "/healthz",
             "agents": "/v1/agents",
+            "research": "/v1/research",
+            "email_writing": "/v1/emails/drafts",
+            "mailbox": "/v1/mailbox/threads",
+            "lead_finding": "/v1/lead-finding/searches",
             "orchestrator": {
                 "cycle": "/v1/orchestrator/cycle",
                 "health": "/v1/orchestrator/health",
                 "report": "/v1/orchestrator/report",
+                "messages": "/v1/orchestrator/messages",
             },
             "authentication": "disabled",
         }
@@ -318,6 +417,385 @@ def create_app(
             "items": [lead.model_dump(mode="json") for lead in leads[offset : offset + limit]],
             "total": total,
         }
+
+    # ── Interactive research ──────────────────────────────────────────────────
+
+    @application.post(
+        "/v1/research",
+        response_model=AcceptedJob,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def create_research(request: ResearchCreateRequest) -> AcceptedJob:
+        if not request.lead_id and not (request.company or "").strip():
+            raise _validation_error("lead_id", "Provide lead_id or company")
+        if request.lead_id:
+            lead = application.state.orchestrator.store.get_lead(request.lead_id)
+            if lead is None:
+                raise HTTPException(status_code=404, detail="Lead not found")
+        job = application.state.executor.submit(
+            "research.create",
+            request.model_dump(exclude_none=True),
+        )
+        return AcceptedJob(job_id=job.id)
+
+    @application.get("/v1/research")
+    async def list_research(lead_id: str | None = None) -> dict[str, Any]:
+        return {
+            "items": application.state.workflow_store.list_research(lead_id)
+        }
+
+    @application.get("/v1/research/{research_id}")
+    async def get_research(research_id: str) -> dict[str, Any]:
+        try:
+            return application.state.workflow_store.get_research(research_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Research document not found") from exc
+
+    @application.patch("/v1/research/{research_id}")
+    async def update_research(
+        research_id: str,
+        request: ResearchPatchRequest,
+    ) -> dict[str, Any]:
+        values = request.model_dump(exclude_none=True, mode="json")
+        if values.get("lead_id") and (
+            application.state.orchestrator.store.get_lead(values["lead_id"]) is None
+        ):
+            raise HTTPException(status_code=404, detail="Lead not found")
+        try:
+            return application.state.workflow_store.update_research(
+                research_id,
+                values,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Research document not found") from exc
+
+    @application.post(
+        "/v1/research/{research_id}/iterate",
+        response_model=AcceptedJob,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def iterate_research(
+        research_id: str,
+        request: ResearchIterateRequest,
+    ) -> AcceptedJob:
+        try:
+            application.state.workflow_store.get_research(research_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Research document not found") from exc
+        job = application.state.executor.submit(
+            "research.iterate",
+            {"research_id": research_id, "instructions": request.instructions},
+        )
+        return AcceptedJob(job_id=job.id)
+
+    # ── Editable email drafts ─────────────────────────────────────────────────
+
+    @application.post(
+        "/v1/emails/drafts",
+        response_model=AcceptedJob,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def create_email_draft(request: EmailDraftCreateRequest) -> AcceptedJob:
+        if application.state.orchestrator.store.get_lead(request.lead_id) is None:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        if application.state.orchestrator.store.get_campaign(request.campaign_id) is None:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        job = application.state.executor.submit(
+            "email.generate",
+            request.model_dump(exclude_none=True),
+        )
+        return AcceptedJob(job_id=job.id)
+
+    @application.get("/v1/emails/drafts")
+    async def list_email_drafts(
+        lead_id: str | None = None,
+        campaign_id: str | None = None,
+        draft_status: Annotated[
+            Literal["draft", "approved", "sent"] | None,
+            Query(alias="status"),
+        ] = None,
+    ) -> dict[str, Any]:
+        return {
+            "items": application.state.workflow_store.list_drafts(
+                lead_id=lead_id,
+                campaign_id=campaign_id,
+                status=draft_status,
+            )
+        }
+
+    @application.get("/v1/emails/drafts/{draft_id}")
+    async def get_email_draft(draft_id: str) -> dict[str, Any]:
+        try:
+            return application.state.workflow_store.get_draft(draft_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Email draft not found") from exc
+
+    @application.patch("/v1/emails/drafts/{draft_id}")
+    async def update_email_draft(
+        draft_id: str,
+        request: EmailDraftPatchRequest,
+    ) -> dict[str, Any]:
+        try:
+            return application.state.workflow_store.update_draft(
+                draft_id,
+                request.model_dump(exclude_none=True),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Email draft not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @application.post(
+        "/v1/emails/drafts/{draft_id}/regenerate",
+        response_model=AcceptedJob,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def regenerate_email_draft(
+        draft_id: str,
+        request: EmailRegenerateRequest,
+    ) -> AcceptedJob:
+        try:
+            application.state.workflow_store.get_draft(draft_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Email draft not found") from exc
+        job = application.state.executor.submit(
+            "email.regenerate",
+            {
+                "draft_id": draft_id,
+                **request.model_dump(exclude_none=True),
+            },
+        )
+        return AcceptedJob(job_id=job.id)
+
+    @application.post("/v1/emails/drafts/{draft_id}/approve")
+    async def approve_email_draft(draft_id: str) -> dict[str, Any]:
+        try:
+            draft = application.state.workflow_store.get_draft(draft_id)
+            if draft["status"] == "sent":
+                raise HTTPException(status_code=409, detail="Email has already been sent")
+            return application.state.workflow_store.set_draft_status(
+                draft_id,
+                "approved",
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Email draft not found") from exc
+
+    @application.post(
+        "/v1/emails/drafts/{draft_id}/send",
+        response_model=AcceptedJob,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def send_email_draft(draft_id: str) -> AcceptedJob:
+        try:
+            draft = application.state.workflow_store.get_draft(draft_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Email draft not found") from exc
+        if draft["status"] != "approved":
+            raise HTTPException(
+                status_code=409,
+                detail="Email draft must be approved before sending",
+            )
+        job = application.state.executor.submit(
+            "email.send",
+            {"draft_id": draft_id},
+        )
+        return AcceptedJob(job_id=job.id)
+
+    # ── Unified mailbox ───────────────────────────────────────────────────────
+
+    @application.get("/v1/mailbox/threads")
+    async def list_mailbox_threads(
+        folder: Literal["inbox", "sent", "replied", "bounced"] = "inbox",
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> dict[str, Any]:
+        application.state.executor.workflow_runner.sync_mailbox_history()
+        return application.state.workflow_store.list_mailbox_threads(
+            folder,
+            page,
+            page_size,
+        )
+
+    @application.get("/v1/mailbox/threads/{thread_id}")
+    async def get_mailbox_thread(thread_id: str) -> dict[str, Any]:
+        application.state.executor.workflow_runner.sync_mailbox_history()
+        try:
+            return application.state.workflow_store.get_mailbox_thread(thread_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Mailbox thread not found") from exc
+
+    @application.post(
+        "/v1/mailbox/threads/{thread_id}/reply",
+        response_model=AcceptedJob,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def reply_to_mailbox_thread(
+        thread_id: str,
+        request: MailboxReplyRequest,
+    ) -> AcceptedJob:
+        application.state.executor.workflow_runner.sync_mailbox_history()
+        try:
+            application.state.workflow_store.get_mailbox_thread(thread_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Mailbox thread not found") from exc
+        job = application.state.executor.submit(
+            "mailbox.reply",
+            {"thread_id": thread_id, **request.model_dump(exclude_none=True)},
+        )
+        return AcceptedJob(job_id=job.id)
+
+    @application.post("/v1/mailbox/threads/{thread_id}/mark-read")
+    async def mark_mailbox_thread_read(thread_id: str) -> dict[str, bool]:
+        try:
+            application.state.workflow_store.mark_thread_read(thread_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Mailbox thread not found") from exc
+        return {"read": True}
+
+    # ── Lead-finding search and selective import ──────────────────────────────
+
+    @application.post(
+        "/v1/lead-finding/searches",
+        response_model=AcceptedJob,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def create_lead_search(request: LeadSearchRequest) -> AcceptedJob:
+        search = application.state.workflow_store.create_search(
+            request.query,
+            request.filters.model_dump(exclude_none=True),
+            request.limit,
+        )
+        job = application.state.executor.submit(
+            "lead_search.run",
+            {"search_id": search["id"], "limit": request.limit},
+        )
+        return AcceptedJob(job_id=job.id)
+
+    @application.get("/v1/lead-finding/searches")
+    async def list_lead_searches() -> dict[str, Any]:
+        return {"items": application.state.workflow_store.list_searches()}
+
+    @application.get("/v1/lead-finding/searches/{search_id}")
+    async def get_lead_search(search_id: str) -> dict[str, Any]:
+        try:
+            return application.state.workflow_store.get_search(search_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Lead search not found") from exc
+
+    @application.post("/v1/lead-finding/searches/{search_id}/import")
+    async def import_lead_search_results(
+        search_id: str,
+        request: LeadImportRequest,
+    ) -> dict[str, Any]:
+        lead_ids = list(dict.fromkeys(request.lead_ids))
+        try:
+            search = application.state.workflow_store.get_search(search_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Lead search not found") from exc
+        if search["status"] != "succeeded":
+            raise HTTPException(status_code=409, detail="Lead search is not complete")
+        results = application.state.workflow_store.search_results(search_id, lead_ids)
+        found_ids = {result["id"] for result in results}
+        missing = [lead_id for lead_id in lead_ids if lead_id not in found_ids]
+        if missing:
+            raise _validation_error(
+                "lead_ids",
+                f"Unknown search result lead IDs: {', '.join(missing)}",
+            )
+        imported: list[str] = []
+        for result in results:
+            lead_id = result["id"]
+            existing = application.state.orchestrator.store.get_lead(lead_id)
+            if existing is None:
+                application.state.orchestrator.store.save_artifact(
+                    artifact_id=f"lead-search:{search_id}:{lead_id}",
+                    kind="lead_discovery",
+                    lead_id=lead_id,
+                    source_job=search_id,
+                    payload=result,
+                )
+                application.state.orchestrator.store.upsert_lead(
+                    PipelineLead(
+                        id=lead_id,
+                        state=DISCOVERED,
+                        email=result.get("email") or "",
+                        company=result.get("company_name") or "",
+                        industry=result.get("industry") or "",
+                        quality_score=(result.get("lead_score") or 0.0) / 100.0,
+                        discovered_at=datetime.now(timezone.utc),
+                        source_job=search_id,
+                        metadata={
+                            "lead_search_id": search_id,
+                            "source_preview": result,
+                        },
+                    )
+                )
+            imported.append(lead_id)
+        application.state.workflow_store.mark_search_results_imported(
+            search_id,
+            imported,
+        )
+        return {"imported_count": len(imported), "lead_ids": imported}
+
+    # ── Natural-language orchestrator ─────────────────────────────────────────
+
+    @application.post(
+        "/v1/orchestrator/messages",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def create_orchestrator_message(
+        request: OrchestratorMessageRequest,
+    ) -> dict[str, str]:
+        context = request.context.model_dump(exclude_none=True) if request.context else {}
+        if context.get("campaign_id") and (
+            application.state.orchestrator.store.get_campaign(context["campaign_id"])
+            is None
+        ):
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        if context.get("lead_id") and (
+            application.state.orchestrator.store.get_lead(context["lead_id"]) is None
+        ):
+            raise HTTPException(status_code=404, detail="Lead not found")
+        conversation_id = application.state.workflow_store.create_conversation(
+            request.message
+        )
+        job = application.state.executor.submit(
+            "orchestrator.message",
+            {
+                "message": request.message,
+                "context": context,
+                "conversation_id": conversation_id,
+            },
+        )
+        return {"job_id": job.id, "conversation_id": conversation_id}
+
+    @application.get("/v1/orchestrator/conversations")
+    async def list_orchestrator_conversations() -> dict[str, Any]:
+        return {"items": application.state.workflow_store.list_conversations()}
+
+    @application.get("/v1/orchestrator/conversations/{conversation_id}")
+    async def get_orchestrator_conversation(conversation_id: str) -> dict[str, Any]:
+        try:
+            return application.state.workflow_store.get_conversation(conversation_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Orchestrator conversation not found",
+            ) from exc
+
+    @application.get("/v1/orchestrator/conversations/{conversation_id}/timeline")
+    async def get_orchestrator_timeline(
+        conversation_id: str,
+    ) -> list[dict[str, Any]]:
+        try:
+            return application.state.workflow_store.conversation_timeline(
+                conversation_id
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Orchestrator conversation not found",
+            ) from exc
 
     @application.get("/v1/health")
     async def pipeline_health() -> Any:

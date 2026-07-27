@@ -39,6 +39,8 @@ class VolumeLimiter:
         account: SendingAccount,
         recipient: str,
         now: datetime | None = None,
+        *,
+        ignore_domain_spacing: bool = False,
     ) -> tuple[bool, str]:
         """Return (allowed, reason). reason is empty when allowed."""
         now = now or datetime.now(timezone.utc)
@@ -62,12 +64,13 @@ class VolumeLimiter:
             return False, f"burst limit reached ({self._config.burst_per_minute}/min)"
 
         # Same-domain spacing.
-        domain = self._domain(recipient)
-        last = self._domain_last_sent.get(domain)
-        if last is not None:
-            gap = (now - last).total_seconds()
-            if gap < self._config.min_seconds_between_same_domain:
-                return False, f"domain {domain} cooling down ({gap:.0f}s < min)"
+        if not ignore_domain_spacing:
+            domain = self._domain(recipient)
+            last = self._domain_last_sent.get(domain)
+            if last is not None:
+                gap = (now - last).total_seconds()
+                if gap < self._config.min_seconds_between_same_domain:
+                    return False, f"domain {domain} cooling down ({gap:.0f}s < min)"
 
         return True, ""
 
