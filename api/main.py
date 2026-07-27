@@ -2,27 +2,43 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import secrets
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from orchestrator import Orchestrator, OrchestratorConfig
 from orchestrator.state_machine import STAGE_BY_NAME
 
+from .config_store import ConfigStore, DatabaseLocator
 from .executor import JobExecutor
 from .jobs import JobRecord, JobStore
 from .scheduler import HourlyScheduler
 from .settings import AppSettings
 
 logger = logging.getLogger(__name__)
-bearer = HTTPBearer(auto_error=False)
+
+AGENT_STAGES: dict[str, tuple[str, ...]] = {
+    "agent1-lead-finder": ("find",),
+    "agent2-research-analyst": ("research",),
+    "agent3-email-writer": ("write",),
+    "agent4-sender": ("send", "followup"),
+    "agent5-reply-handler": ("reply",),
+}
+
+AGENT_DESCRIPTIONS: dict[str, str] = {
+    "agent1-lead-finder": "Discovers and verifies new leads.",
+    "agent2-research-analyst": "Researches and enriches discovered leads.",
+    "agent3-email-writer": "Creates personalized outreach emails.",
+    "agent4-sender": "Sends prepared emails and processes follow-ups.",
+    "agent5-reply-handler": "Classifies replies and selects the next action.",
+}
 
 
 class CampaignCreateRequest(BaseModel):
@@ -37,6 +53,19 @@ class SenderEventRequest(BaseModel):
     url: str = Field(default="", max_length=4_000)
 
 
+class SetupRequest(BaseModel):
+    database_path: str = Field(min_length=1, max_length=4_000)
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SettingsUpdateRequest(BaseModel):
+    values: dict[str, Any]
+
+
+class AgentRunRequest(BaseModel):
+    stage: str | None = None
+
+
 def create_app(
     settings: AppSettings | None = None,
     orchestrator_factory: Callable[[OrchestratorConfig], Orchestrator] = Orchestrator,
@@ -44,38 +73,67 @@ def create_app(
     settings = settings or AppSettings.from_env()
     settings.validate()
 
-    @asynccontextmanager
-    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    async def stop_runtime(application: FastAPI) -> None:
+        scheduler = getattr(application.state, "scheduler", None)
+        executor = getattr(application.state, "executor", None)
+        orchestrator = getattr(application.state, "orchestrator", None)
+        job_store = getattr(application.state, "job_store", None)
+        if scheduler is not None:
+            await scheduler.stop()
+        if executor is not None:
+            await executor.stop()
+        if orchestrator is not None:
+            orchestrator.store.close()
+        if job_store is not None:
+            job_store.close()
+
+    async def start_runtime(
+        application: FastAPI,
+        database_path: Path,
+        config_store: ConfigStore,
+    ) -> None:
+        config_store.apply_to_process()
         config = OrchestratorConfig.from_env()
-        config.db_path = str(settings.data_dir / "orchestrator" / "orchestrator.db")
+        config.db_path = str(database_path)
         orchestrator = orchestrator_factory(config)
-        job_store = JobStore(settings.job_db_path)
+        job_store = JobStore(database_path)
         executor = JobExecutor(job_store, orchestrator)
         scheduler = HourlyScheduler(
-            executor, settings.scheduler_timezone, settings.scheduler_interval_seconds
+            executor,
+            config_store.get("scheduler_timezone"),
+            settings.scheduler_interval_seconds,
         )
-        application.state.settings = settings
+        application.state.database_path = database_path
+        application.state.config_store = config_store
         application.state.orchestrator = orchestrator
         application.state.job_store = job_store
         application.state.executor = executor
         application.state.scheduler = scheduler
         await executor.start()
-        if settings.scheduler_enabled:
+        if config_store.get_bool("scheduler_enabled"):
             scheduler.start()
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        application.state.settings = settings
+        application.state.runtime_lock = asyncio.Lock()
+        application.state.database_locator = DatabaseLocator(settings.data_dir)
+        database_path = application.state.database_locator.selected_path()
+        config_store = ConfigStore(database_path)
+        await start_runtime(application, database_path, config_store)
         try:
             yield
         finally:
-            await scheduler.stop()
-            await executor.stop()
-            orchestrator.store.close()
-            job_store.close()
+            await stop_runtime(application)
+            application.state.config_store.close()
 
     application = FastAPI(
         title="AutoReach API",
         version="0.1.0",
         description=(
-            "Authenticated API for campaign planning and the AutoReach agent pipeline. "
-            "Long-running operations are represented as durable jobs."
+            "API-only control plane for campaign planning, the AutoReach orchestrator, "
+            "and its agents. Long-running operations are represented as durable jobs. "
+            "Authentication is not enabled."
         ),
         lifespan=lifespan,
     )
@@ -84,45 +142,95 @@ def create_app(
             CORSMiddleware,
             allow_origins=list(settings.cors_origins),
             allow_credentials=False,
-            allow_methods=["GET", "POST"],
-            allow_headers=["Authorization", "Content-Type"],
+            allow_methods=["GET", "POST", "PATCH"],
+            allow_headers=["Content-Type"],
         )
 
-    async def require_auth(
-        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-    ) -> None:
-        if not settings.api_secret and settings.environment != "production":
-            return
-        if (
-            credentials is None
-            or credentials.scheme.lower() != "bearer"
-            or not secrets.compare_digest(credentials.credentials, settings.api_secret)
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or missing bearer token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-    auth = Depends(require_auth)
-
     @application.get("/")
-    async def root() -> dict[str, str]:
-        return {"name": "AutoReach API", "docs": "/docs", "health": "/healthz"}
+    async def root() -> dict[str, Any]:
+        return {
+            "name": "AutoReach API",
+            "version": application.version,
+            "docs": "/docs",
+            "openapi": "/openapi.json",
+            "health": "/healthz",
+            "agents": "/v1/agents",
+            "orchestrator": {
+                "cycle": "/v1/orchestrator/cycle",
+                "health": "/v1/orchestrator/health",
+                "report": "/v1/orchestrator/report",
+            },
+            "authentication": "disabled",
+        }
 
     @application.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @application.get("/v1/config", dependencies=[auth])
+    @application.get("/v1/setup")
+    async def setup_status() -> dict[str, Any]:
+        config_store: ConfigStore = application.state.config_store
+        return {
+            "configured": config_store.configured,
+            "database_engine": "sqlite",
+            "default_database_path": (
+                ""
+                if config_store.configured
+                else str(application.state.database_locator.selected_path())
+            ),
+        }
+
+    @application.post("/v1/setup", status_code=status.HTTP_201_CREATED)
+    async def setup(request: SetupRequest) -> dict[str, Any]:
+        async with application.state.runtime_lock:
+            current_store: ConfigStore = application.state.config_store
+            if current_store.configured:
+                raise HTTPException(status_code=409, detail="AutoReach is already configured")
+            locator: DatabaseLocator = application.state.database_locator
+            try:
+                selected = locator.validate(request.database_path)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            try:
+                config_store = ConfigStore(selected)
+                config_store.initialize(request.settings)
+            except ValueError as exc:
+                config_store.close()
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            await stop_runtime(application)
+            current_store.close()
+            locator.save(selected)
+            await start_runtime(application, selected, config_store)
+            return {"configured": True, "database_path": str(selected)}
+
+    @application.get("/v1/settings")
+    async def get_settings() -> dict[str, Any]:
+        return application.state.config_store.public_settings()
+
+    @application.patch("/v1/settings")
+    async def update_settings(request: SettingsUpdateRequest) -> dict[str, Any]:
+        async with application.state.runtime_lock:
+            config_store: ConfigStore = application.state.config_store
+            try:
+                config_store.update(request.values)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            await stop_runtime(application)
+            await start_runtime(application, application.state.database_path, config_store)
+            return config_store.public_settings()
+
+    @application.get("/v1/config")
     async def public_config() -> dict[str, Any]:
         orchestrator = application.state.orchestrator
+        config_store: ConfigStore = application.state.config_store
         return {
             "environment": settings.environment,
             "simulate": orchestrator.config.simulate,
             "reply_handling_enabled": orchestrator.config.reply_handling_enabled,
-            "scheduler_enabled": settings.scheduler_enabled,
-            "scheduler_timezone": settings.scheduler_timezone,
+            "scheduler_enabled": config_store.get_bool("scheduler_enabled"),
+            "scheduler_timezone": config_store.get("scheduler_timezone"),
+            "database_engine": "sqlite",
             "stages": list(STAGE_BY_NAME),
         }
 
@@ -130,12 +238,11 @@ def create_app(
         "/v1/campaigns",
         response_model=JobRecord,
         status_code=status.HTTP_202_ACCEPTED,
-        dependencies=[auth],
     )
     async def create_campaign(request: CampaignCreateRequest) -> JobRecord:
         return application.state.executor.submit("campaign.create", {"prompt": request.prompt})
 
-    @application.get("/v1/campaigns", dependencies=[auth])
+    @application.get("/v1/campaigns")
     async def list_campaigns(
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
         offset: Annotated[int, Query(ge=0)] = 0,
@@ -143,14 +250,14 @@ def create_app(
         campaigns = application.state.orchestrator.store.list_campaigns(limit, offset)
         return {"items": [item.model_dump(mode="json") for item in campaigns]}
 
-    @application.get("/v1/campaigns/{campaign_id}", dependencies=[auth])
+    @application.get("/v1/campaigns/{campaign_id}")
     async def get_campaign(campaign_id: str) -> Any:
         campaign = application.state.orchestrator.store.get_campaign(campaign_id)
         if campaign is None:
             raise HTTPException(status_code=404, detail="Campaign not found")
         return campaign
 
-    @application.post("/v1/campaigns/{campaign_id}/activate", dependencies=[auth])
+    @application.post("/v1/campaigns/{campaign_id}/activate")
     async def activate_campaign(campaign_id: str) -> Any:
         try:
             return application.state.orchestrator.activate_campaign(campaign_id)
@@ -161,7 +268,6 @@ def create_app(
         "/v1/jobs/find",
         response_model=JobRecord,
         status_code=status.HTTP_202_ACCEPTED,
-        dependencies=[auth],
     )
     async def run_find() -> JobRecord:
         return application.state.executor.submit("pipeline.find")
@@ -170,7 +276,6 @@ def create_app(
         "/v1/jobs/cycle",
         response_model=JobRecord,
         status_code=status.HTTP_202_ACCEPTED,
-        dependencies=[auth],
     )
     async def run_cycle() -> JobRecord:
         return application.state.executor.submit("pipeline.cycle")
@@ -179,28 +284,27 @@ def create_app(
         "/v1/jobs/stages/{stage_name}",
         response_model=JobRecord,
         status_code=status.HTTP_202_ACCEPTED,
-        dependencies=[auth],
     )
     async def run_stage(stage_name: str) -> JobRecord:
         if stage_name not in STAGE_BY_NAME:
             raise HTTPException(status_code=404, detail="Unknown pipeline stage")
         return application.state.executor.submit("pipeline.stage", {"stage": stage_name})
 
-    @application.get("/v1/jobs", dependencies=[auth])
+    @application.get("/v1/jobs")
     async def list_jobs(
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
         offset: Annotated[int, Query(ge=0)] = 0,
     ) -> dict[str, Any]:
         return {"items": application.state.job_store.list(limit, offset)}
 
-    @application.get("/v1/jobs/{job_id}", response_model=JobRecord, dependencies=[auth])
+    @application.get("/v1/jobs/{job_id}", response_model=JobRecord)
     async def get_job(job_id: str) -> JobRecord:
         try:
             return application.state.job_store.get(job_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
 
-    @application.get("/v1/leads", dependencies=[auth])
+    @application.get("/v1/leads")
     async def list_leads(
         lead_state: Annotated[str | None, Query(alias="state")] = None,
         limit: Annotated[int, Query(ge=1, le=500)] = 100,
@@ -215,11 +319,11 @@ def create_app(
             "total": total,
         }
 
-    @application.get("/v1/health", dependencies=[auth])
+    @application.get("/v1/health")
     async def pipeline_health() -> Any:
         return application.state.orchestrator.health()
 
-    @application.get("/v1/report", dependencies=[auth])
+    @application.get("/v1/report")
     async def pipeline_report() -> Any:
         return application.state.orchestrator.report()
 
@@ -227,11 +331,70 @@ def create_app(
         "/v1/events/sender",
         response_model=JobRecord,
         status_code=status.HTTP_202_ACCEPTED,
-        dependencies=[auth],
     )
     async def sender_event(request: SenderEventRequest) -> JobRecord:
         """Accept a normalized event after a provider-specific signature check upstream."""
         return application.state.executor.submit("sender.event", request.model_dump())
+
+    @application.get("/v1/agents")
+    async def list_agents() -> dict[str, Any]:
+        return {
+            "items": [
+                {
+                    "name": name,
+                    "description": AGENT_DESCRIPTIONS[name],
+                    "stages": list(stages),
+                    "run_endpoint": f"/v1/agents/{name}/run",
+                }
+                for name, stages in AGENT_STAGES.items()
+            ]
+        }
+
+    @application.post(
+        "/v1/agents/{agent_name}/run",
+        response_model=JobRecord,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def run_agent(agent_name: str, request: AgentRunRequest) -> JobRecord:
+        stages = AGENT_STAGES.get(agent_name)
+        if stages is None:
+            raise HTTPException(status_code=404, detail="Unknown agent")
+        if request.stage is None:
+            if len(stages) != 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Choose one of these stages: {', '.join(stages)}",
+                )
+            stage_name = stages[0]
+        else:
+            stage_name = request.stage
+            if stage_name not in stages:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"{agent_name} supports these stages: {', '.join(stages)}"
+                    ),
+                )
+        return application.state.executor.submit(
+            "pipeline.stage",
+            {"stage": stage_name, "agent": agent_name},
+        )
+
+    @application.post(
+        "/v1/orchestrator/cycle",
+        response_model=JobRecord,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def run_orchestrator_cycle() -> JobRecord:
+        return application.state.executor.submit("pipeline.cycle")
+
+    @application.get("/v1/orchestrator/health")
+    async def orchestrator_health() -> Any:
+        return application.state.orchestrator.health()
+
+    @application.get("/v1/orchestrator/report")
+    async def orchestrator_report() -> Any:
+        return application.state.orchestrator.report()
 
     return application
 

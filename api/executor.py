@@ -104,7 +104,10 @@ class JobExecutor:
     def _handle_sender_event(self, payload: dict[str, Any]) -> Any:
         if self._sender is None:
             module = _load_agent("agent4-sender", "agent4_sender")
-            self._sender = module.SenderAgent(module.ServiceConfig.from_env())
+            config = module.ServiceConfig.from_env()
+            config.db_path = self.orchestrator.config.db_path
+            config.emails_db_path = self.orchestrator.config.db_path
+            self._sender = module.SenderAgent(config)
         sent_id = payload["sent_email_id"]
         event = payload["event"]
         if event == "reply":

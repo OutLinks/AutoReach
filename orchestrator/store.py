@@ -94,6 +94,17 @@ _SCHEMA = [
         updated_at  TEXT NOT NULL
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS agent_artifacts (
+        id          TEXT PRIMARY KEY,
+        kind        TEXT NOT NULL,
+        lead_id     TEXT,
+        source_job  TEXT,
+        payload     TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    );
+    """,
 ]
 
 _INDEXES = [
@@ -101,6 +112,8 @@ _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_runs_stage ON runs (stage);",
     "CREATE INDEX IF NOT EXISTS idx_events_lead ON events (lead_id);",
     "CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns (status);",
+    "CREATE INDEX IF NOT EXISTS idx_artifacts_lead ON agent_artifacts (lead_id);",
+    "CREATE INDEX IF NOT EXISTS idx_artifacts_kind ON agent_artifacts (kind);",
 ]
 
 
@@ -258,6 +271,42 @@ class OrchestratorStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    # ── Raw agent artifacts ───────────────────────────────────────────────────
+
+    def save_artifact(
+        self,
+        artifact_id: str,
+        kind: str,
+        payload: dict,
+        lead_id: str = "",
+        source_job: str = "",
+    ) -> None:
+        """Keep complete agent output in the shared database, not only handoff files."""
+        now = _iso(datetime.utcnow())
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO agent_artifacts (
+                    id, kind, lead_id, source_job, payload, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    kind = excluded.kind,
+                    lead_id = excluded.lead_id,
+                    source_job = excluded.source_job,
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    artifact_id,
+                    kind,
+                    lead_id,
+                    source_job,
+                    json.dumps(payload),
+                    now,
+                    now,
+                ),
+            )
 
     # ── Campaign briefs ───────────────────────────────────────────────────────
 

@@ -21,7 +21,7 @@ A central orchestrator owns the master lead lifecycle. Individual agents own the
 - Target comparison branch in this Conductor workspace: `origin/main`
 - Latest commit: `be8e9a2` (`Add AWS SES sending provider and environment loading functionality`)
 - Language/runtime: Python 3.10+ syntax is required (`X | None`, standard-library `asyncio`, `sqlite3`).
-- Dependency manifest: [requirements.txt](requirements.txt). The repository now includes an authenticated FastAPI backend, a durable single-consumer job executor, an in-process scheduler, Docker/Render packaging, and a standard-library `unittest` suite. There is still no `pyproject.toml`, package installer configuration, migration system, or CI workflow.
+- Dependency manifest: [requirements.txt](requirements.txt). The repository now includes an API-only FastAPI backend, a durable single-consumer job executor, an in-process scheduler, Docker/Render packaging, and a standard-library `unittest` suite. There is still no `pyproject.toml`, package installer configuration, migration system, or CI workflow.
 - Current working tree was clean when this document was written.
 
 ## Top-level map
@@ -43,11 +43,12 @@ Dockerfile / render.yaml           Single-instance deployment packaging
 
 ## HTTP backend
 
-The deployable entrypoint is `api.main:app`. All `/v1` routes use Bearer-token
-authentication in production; `/healthz` remains public for hosting probes.
+The deployable entrypoint is `api.main:app`. It is an API-only service and
+currently has no authentication. Do not expose it to an untrusted network.
 Campaign planning, pipeline stages, scheduled ticks, and normalized sender
 events are stored as durable jobs in `api/jobs.py` and executed sequentially by
 `api/executor.py`. Interrupted queued/running jobs are recovered after restart.
+See [API.md](API.md) for the route contract.
 
 The sequential worker and one Uvicorn process are intentional: the agents still
 share local JSON/SQLite artifacts. `AUTOREACH_DATA_DIR` redirects every agent,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -13,6 +14,22 @@ def data_root() -> Path | None:
     """Return the configured persistent data root, if one was supplied."""
     value = os.getenv("AUTOREACH_DATA_DIR", "").strip()
     return Path(value).expanduser().resolve() if value else None
+
+
+def configured_database_path() -> Path | None:
+    """Return the UI-selected shared database without requiring a .env file."""
+    direct = os.getenv("AUTOREACH_DATABASE_PATH", "").strip()
+    if direct:
+        return Path(direct).expanduser().resolve()
+    root = data_root() or (_REPOSITORY_ROOT / ".data")
+    selection = root / "api" / "database.json"
+    if not selection.exists():
+        return None
+    try:
+        payload = json.loads(selection.read_text(encoding="utf-8"))
+        return Path(payload["path"]).expanduser().resolve()
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def orchestrator_output_dir() -> Path:
