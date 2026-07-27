@@ -51,6 +51,8 @@ class SchedulingLayer:
         step: str,
         earliest_day_offset: int = 0,
         now: Optional[datetime] = None,
+        *,
+        ignore_domain_spacing: bool = False,
     ) -> Optional[ScheduledSend]:
         """
         Produce a ScheduledSend for one email, or None if no account has capacity.
@@ -64,7 +66,11 @@ class SchedulingLayer:
         # email is the recipient. Callers pass it via the "recipient" key.
         recipient = email.get("recipient", recipient)
 
-        account = self._pick_account(recipient, now)
+        account = self._pick_account(
+            recipient,
+            now,
+            ignore_domain_spacing=ignore_domain_spacing,
+        )
         if account is None:
             logger.info(
                 "SchedulingLayer: no account capacity for %s (step=%s)", recipient, step
@@ -97,14 +103,25 @@ class SchedulingLayer:
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
-    def _pick_account(self, recipient: str, now: datetime) -> Optional[SendingAccount]:
+    def _pick_account(
+        self,
+        recipient: str,
+        now: datetime,
+        *,
+        ignore_domain_spacing: bool = False,
+    ) -> Optional[SendingAccount]:
         # Health-weighted round-robin: best health first, then least loaded.
         ordered = sorted(
             (a for a in self._accounts if a.is_sendable),
             key=lambda a: (-a.health_score, a.sent_today),
         )
         for account in ordered:
-            allowed, reason = self._limiter.can_send(account, recipient, now)
+            allowed, reason = self._limiter.can_send(
+                account,
+                recipient,
+                now,
+                ignore_domain_spacing=ignore_domain_spacing,
+            )
             if allowed:
                 return account
             logger.debug("SchedulingLayer: skip %s — %s", account.email, reason)

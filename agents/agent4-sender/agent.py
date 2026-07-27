@@ -192,6 +192,53 @@ class SenderAgent:
         self._reputation.enforce(self._scheduling.accounts)
         return self._finalize(job)
 
+    async def send_message(
+        self,
+        *,
+        email_id: str,
+        lead_id: str,
+        recipient: str,
+        subject: str,
+        body: str,
+        from_name: str = "",
+        job_id: str | None = None,
+        step: str = STEP_DAY0,
+        in_reply_to: str = "",
+        references: str = "",
+    ) -> Optional[SentEmail]:
+        """Send one API-approved message through the normal safety and tracking path."""
+        if not recipient:
+            raise ValueError("Recipient email is required")
+        allowed, reason = self._reputation.can_email(recipient)
+        if not allowed:
+            raise ValueError(f"Recipient is suppressed: {reason}")
+        scheduled = self._scheduling.schedule(
+            {
+                "id": email_id,
+                "lead_id": lead_id,
+                "recipient": recipient,
+            },
+            step=step,
+            # A human-authored reply is part of an existing conversation, not
+            # another cold-send attempt to the same domain.
+            ignore_domain_spacing=step == "manual_reply",
+        )
+        if scheduled is None:
+            raise ValueError("No sending account currently has capacity")
+        return await self._dispatch(
+            email_id=email_id,
+            lead_id=lead_id,
+            step=step,
+            recipient=recipient,
+            account_email=scheduled.account_email,
+            subject=subject,
+            body=body,
+            from_name=from_name,
+            job_id=job_id or str(uuid4()),
+            in_reply_to=in_reply_to,
+            references=references,
+        )
+
     async def _send_followup(self, state, job: SendJob, now: datetime) -> None:
         allowed, reason = self._reputation.can_email(state.recipient)
         if not allowed:
@@ -329,6 +376,10 @@ class SenderAgent:
 
     def reputation_status(self, account_email: str = "*"):
         return self._reputation.health(account_email)
+
+    def close(self) -> None:
+        """Release the sender's SQLite connection."""
+        self._store.close()
 
     # ── Internal ───────────────────────────────────────────────────────────────
 

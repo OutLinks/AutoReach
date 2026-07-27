@@ -14,6 +14,8 @@ from orchestrator.adapters.live import _load_agent
 from orchestrator.state_machine import STAGE_BY_NAME
 
 from .jobs import JobRecord, JobStore
+from .workflow_runner import WorkflowRunner
+from .workflows import WorkflowStore
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +33,16 @@ def _jsonable(value: Any) -> Any:
 class JobExecutor:
     """Runs jobs sequentially so the file/SQLite agent contracts stay safe."""
 
-    def __init__(self, store: JobStore, orchestrator: Orchestrator) -> None:
+    def __init__(
+        self,
+        store: JobStore,
+        orchestrator: Orchestrator,
+        workflows: WorkflowStore,
+    ) -> None:
         self.store = store
         self.orchestrator = orchestrator
+        self.workflows = workflows
+        self.workflow_runner = WorkflowRunner(workflows, orchestrator)
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._worker: asyncio.Task[None] | None = None
         self._sender: Any | None = None
@@ -46,14 +55,17 @@ class JobExecutor:
         self._worker = asyncio.create_task(self._run(), name="autoreach-job-worker")
 
     async def stop(self) -> None:
-        if self._worker is None:
-            return
-        self._worker.cancel()
-        try:
-            await self._worker
-        except asyncio.CancelledError:
-            pass
-        self._worker = None
+        if self._worker is not None:
+            self._worker.cancel()
+            try:
+                await self._worker
+            except asyncio.CancelledError:
+                pass
+            self._worker = None
+        if self._sender is not None:
+            self._sender.close()
+            self._sender = None
+        self.workflow_runner.close()
 
     def submit(
         self,
@@ -98,7 +110,20 @@ class JobExecutor:
         if job.kind == "pipeline.tick":
             return await self.orchestrator.tick(datetime.fromisoformat(payload["now"]))
         if job.kind == "sender.event":
-            return self._handle_sender_event(payload)
+            result = self._handle_sender_event(payload)
+            self.workflow_runner.record_sender_event(payload, result, job.id)
+            return result
+        if job.kind in {
+            "research.create",
+            "research.iterate",
+            "email.generate",
+            "email.regenerate",
+            "email.send",
+            "mailbox.reply",
+            "lead_search.run",
+            "orchestrator.message",
+        }:
+            return await self.workflow_runner.execute(job.kind, payload, job.id)
         raise ValueError(f"Unsupported job kind: {job.kind}")
 
     def _handle_sender_event(self, payload: dict[str, Any]) -> Any:
