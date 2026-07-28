@@ -14,7 +14,7 @@ from orchestrator.campaigns import (
     CampaignBrief,
     CampaignMessaging,
 )
-from orchestrator.models import DISCOVERED, PipelineLead
+from orchestrator.models import DISCOVERED, NEW, PipelineLead
 
 
 class InteractiveWorkflowApiTests(unittest.TestCase):
@@ -242,6 +242,28 @@ class InteractiveWorkflowApiTests(unittest.TestCase):
             self.assertEqual(detail["found_count"], 3)
             selected = [item["id"] for item in detail["leads"][:2]]
 
+            previews = client.get("/v1/leads").json()["items"]
+            self.assertEqual(
+                {lead["id"] for lead in previews},
+                {item["id"] for item in detail["leads"]},
+            )
+            self.assertTrue(all(lead["state"] == NEW for lead in previews))
+            self.assertTrue(
+                all(lead["metadata"]["search_preview"] for lead in previews)
+            )
+
+            research = client.post(
+                "/v1/research",
+                json={"lead_id": selected[0], "prompt": "Check current priorities."},
+            )
+            self.assertEqual(research.status_code, 202, research.text)
+            research_job = self._wait(client, research.json()["job_id"])
+            self.assertEqual(
+                research_job["status"],
+                "succeeded",
+                research_job["error"],
+            )
+
             imported = client.post(
                 f"/v1/lead-finding/searches/{search_id}/import",
                 json={"lead_ids": selected},
@@ -249,7 +271,15 @@ class InteractiveWorkflowApiTests(unittest.TestCase):
             self.assertEqual(imported.status_code, 200, imported.text)
             self.assertEqual(imported.json()["imported_count"], 2)
             leads = client.get("/v1/leads").json()["items"]
-            self.assertEqual({lead["id"] for lead in leads}, set(selected))
+            by_id = {lead["id"]: lead for lead in leads}
+            self.assertEqual(set(by_id), {item["id"] for item in detail["leads"]})
+            for lead_id in selected:
+                self.assertEqual(by_id[lead_id]["state"], DISCOVERED)
+                self.assertFalse(by_id[lead_id]["metadata"]["search_preview"])
+                self.assertTrue(by_id[lead_id]["metadata"]["imported"])
+            unselected = next(lead for lead in leads if lead["id"] not in selected)
+            self.assertEqual(unselected["state"], NEW)
+            self.assertTrue(unselected["metadata"]["search_preview"])
 
     def test_operator_messages_create_conversation_and_timeline(self) -> None:
         with TestClient(create_app(self.settings)) as client:

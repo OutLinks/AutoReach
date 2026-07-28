@@ -65,6 +65,14 @@ records include `company_name`, `email`, `company_description`,
 `company_website`, and the public URLs used as evidence; records without a
 public company-domain email are omitted.
 
+Completed search results are also persisted to the canonical lead store as
+`new` search previews. They can be researched immediately by lead ID, but do
+not enter the outreach pipeline until
+`POST /v1/lead-finding/searches/{search_id}/import` promotes them to
+`discovered`. When a selected lead has no enrichment, live research enables the
+configured Tavily provider and performs a public-site scrape (without requiring
+Firecrawl) before analysis.
+
 ## Agent control
 
 `GET /v1/agents` returns the available agents and their stages.

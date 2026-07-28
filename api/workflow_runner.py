@@ -61,7 +61,7 @@ class WorkflowRunner:
         if self.orchestrator.config.simulate:
             document = self._simulated_research(lead_id, company, prompt)
         else:
-            document = await self._live_research(lead_id, company, prompt)
+            document = await self._live_research(lead_id, company, prompt, job_id)
         created = self.workflows.create_research(
             lead_id=lead_id,
             company=company,
@@ -135,12 +135,22 @@ class WorkflowRunner:
         }
 
     async def _live_research(
-        self, lead_id: str, company: str, prompt: str
+        self,
+        lead_id: str,
+        company: str,
+        prompt: str,
+        job_id: str,
     ) -> dict[str, Any]:
         module = _load_agent("agent2-research-analyst", "agent2_research_analyst")
         config = module.ServiceConfig()
         config.campaign_instruction = prompt
         lead_payload = self._lead_payload(lead_id, company)
+        has_enrichment = self._has_research_enrichment(lead_payload)
+        if not has_enrichment and config.tavily.api_key.strip():
+            # Interactive research must be able to collect its own evidence for
+            # a freshly discovered/search-scoped lead. Agent 2 otherwise keeps
+            # Tavily disabled by default even when the runtime key is present.
+            config.tavily.enabled = True
         if not (
             lead_payload.get("website") or lead_payload.get("company_website")
         ):
@@ -153,7 +163,7 @@ class WorkflowRunner:
         # Existing lead records can use the full Agent 2 batch contract. A
         # company-only request uses the same collection and analysis layers on a
         # synthetic company record because Agent 2's file reader requires an id.
-        if lead_id and self._agent1_lead(lead_id):
+        if lead_id and self._agent1_lead(lead_id) and has_enrichment:
             agent = module.ResearchAgent(config)
             await agent.run(job_id=job_id, lead_ids=[lead_id])
             profile = self._latest_json_record(
@@ -590,6 +600,7 @@ class WorkflowRunner:
                     search["filters"],
                     payload["limit"],
                 )
+            self._persist_search_results(search_id, results)
             self.workflows.finish_search(search_id, results)
         except Exception as exc:
             self.workflows.fail_search(search_id, str(exc))
@@ -785,6 +796,13 @@ class WorkflowRunner:
         if raw:
             return raw
         lead = self.orchestrator.store.get_lead(lead_id) if lead_id else None
+        source_preview = (lead.metadata.get("source_preview") if lead else None) or {}
+        if source_preview:
+            return {
+                **source_preview,
+                "id": lead_id or source_preview.get("id") or f"company:{uuid4()}",
+                "company_name": source_preview.get("company_name") or company,
+            }
         return {
             "id": lead_id or f"company:{uuid4()}",
             "company_name": company,
@@ -792,6 +810,71 @@ class WorkflowRunner:
             "industry": lead.industry if lead else "",
             "full_name": "",
         }
+
+    @staticmethod
+    def _has_research_enrichment(lead: dict[str, Any]) -> bool:
+        raw = lead.get("raw_data") or {}
+        discovery_only = {"web_scraper", "tavily"}
+        has_enriched_raw_data = any(
+            value
+            for key, value in raw.items()
+            if key not in discovery_only
+        )
+        return bool(
+            has_enriched_raw_data
+            or lead.get("technologies")
+            or lead.get("linkedin_url")
+            or lead.get("company_linkedin_url")
+            or lead.get("employee_count")
+            or lead.get("funding_total")
+            or lead.get("annual_revenue")
+        )
+
+    def _persist_search_results(
+        self,
+        search_id: str,
+        results: list[dict[str, Any]],
+    ) -> None:
+        """Make search previews addressable without queueing them for outreach."""
+        now = datetime.now(timezone.utc)
+        for result in results:
+            lead_id = str(result.get("id") or "").strip()
+            if not lead_id:
+                continue
+            existing = self.orchestrator.store.get_lead(lead_id)
+            existing_metadata = dict(existing.metadata) if existing else {}
+            is_unimported_preview = existing is None or bool(
+                existing_metadata.get("search_preview")
+            )
+            metadata = {
+                **existing_metadata,
+                "lead_search_id": search_id,
+                "source_preview": result,
+                "search_preview": is_unimported_preview,
+                "imported": not is_unimported_preview,
+            }
+            lead = existing or pipeline_models.PipelineLead(
+                id=lead_id,
+                state=pipeline_models.NEW,
+                discovered_at=now,
+            )
+            lead.email = result.get("email") or lead.email
+            lead.company = result.get("company_name") or lead.company
+            lead.industry = result.get("industry") or lead.industry
+            lead.quality_score = (
+                (result.get("lead_score") or 0.0) / 100.0
+                or lead.quality_score
+            )
+            lead.source_job = lead.source_job or search_id
+            lead.metadata = metadata
+            self.orchestrator.store.save_artifact(
+                artifact_id=f"lead-search:{search_id}:{lead_id}",
+                kind="lead_discovery",
+                lead_id=lead_id,
+                source_job=search_id,
+                payload=result,
+            )
+            self.orchestrator.store.upsert_lead(lead)
 
     def _agent1_lead(self, lead_id: str) -> dict[str, Any] | None:
         if not lead_id:

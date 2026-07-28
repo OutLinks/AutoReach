@@ -6,6 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+from api.workflow_runner import WorkflowRunner
 from orchestrator.adapters.live import _load_agent, _relax_simulated_pacing
 from orchestrator.campaigns import (
     AgentInstructions,
@@ -13,7 +14,7 @@ from orchestrator.campaigns import (
     CampaignSendPolicy,
 )
 from orchestrator.config import OrchestratorConfig
-from orchestrator.models import CLOSED, READY
+from orchestrator.models import CLOSED, READY, PipelineLead
 from orchestrator.responsibilities.decide import Decide
 from orchestrator.responsibilities.monitor import Monitor
 from orchestrator.responsibilities.optimize import Optimize
@@ -304,6 +305,171 @@ class AgentHandoffContractTests(unittest.TestCase):
         )
 
         self.assertIsNone(content)
+
+    def test_public_website_scrape_works_without_firecrawl(self) -> None:
+        config = self.agent2_config.ServiceConfig()
+        config.firecrawl.api_key = ""
+        scraper = self.website_module.WebsiteScraper(config)
+        response = MagicMock(
+            status_code=200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            url="https://acme.example",
+            text=(
+                "<html><head><title>Acme AI</title>"
+                '<meta name="description" content="AI support platform">'
+                "</head><body><main>Automate customer support.</main>"
+                "<script>ignore me</script></body></html>"
+            ),
+        )
+        client = MagicMock()
+        client.get = AsyncMock(return_value=response)
+
+        content = asyncio.run(
+            scraper._scrape_page(client, "https://acme.example")
+        )
+
+        self.assertIn("Acme AI", content)
+        self.assertIn("AI support platform", content)
+        self.assertIn("Automate customer support", content)
+        self.assertNotIn("ignore me", content)
+        client.get.assert_awaited_once_with("https://acme.example")
+
+    def test_public_website_scraper_rejects_private_network_urls(self) -> None:
+        config = self.agent2_config.ServiceConfig()
+        config.firecrawl.api_key = ""
+        scraper = self.website_module.WebsiteScraper(config)
+        client = MagicMock()
+        client.get = AsyncMock()
+
+        content = asyncio.run(
+            scraper._scrape_page(client, "http://127.0.0.1/private")
+        )
+
+        self.assertIsNone(content)
+        client.get.assert_not_awaited()
+
+    def test_unenriched_search_preview_runs_tavily_collection(self) -> None:
+        collector_module = importlib.import_module(
+            "agent2_research_analyst.layers.collection.collector"
+        )
+        analyzer_module = importlib.import_module(
+            "agent2_research_analyst.layers.analysis.analyzer"
+        )
+        config = self.agent2_config.ServiceConfig()
+        config.tavily.api_key = "tavily-test-key"
+        config.tavily.enabled = False
+        lead = PipelineLead(
+            id="search-preview-1",
+            company="Acme",
+            metadata={
+                "search_preview": True,
+                "source_preview": {
+                    "id": "search-preview-1",
+                    "company_name": "Acme",
+                    "company_website": "https://acme.example",
+                    "raw_data": {"web_scraper": {"url": "https://acme.example"}},
+                },
+            },
+        )
+        raw = self.models.RawResearchData(
+            public_company_profile="Acme builds support automation.",
+            web_search_results=[
+                self.models.SearchResult(
+                    title="Acme",
+                    snippet="Support automation",
+                    url="https://acme.example/about",
+                    source="tavily",
+                )
+            ],
+            sources_attempted=["tavily", "website"],
+            sources_succeeded=["tavily", "website"],
+        )
+        collector = SimpleNamespace(collect=AsyncMock(return_value=raw))
+        analyzer = SimpleNamespace(analyze=AsyncMock())
+        store = SimpleNamespace(get_lead=lambda lead_id: lead)
+        runner = WorkflowRunner(
+            MagicMock(),
+            SimpleNamespace(store=store),
+        )
+        module = SimpleNamespace(
+            ServiceConfig=lambda: config,
+            ResearchAgent=MagicMock(),
+        )
+
+        with (
+            patch("api.workflow_runner._load_agent", return_value=module),
+            patch.object(runner, "_agent1_lead", return_value=None),
+            patch.object(
+                collector_module,
+                "DataCollector",
+                return_value=collector,
+            ),
+            patch.object(
+                analyzer_module,
+                "AnalysisLayer",
+                return_value=analyzer,
+            ),
+        ):
+            document = asyncio.run(
+                runner._live_research(
+                    "search-preview-1",
+                    "Acme",
+                    "Find current priorities.",
+                    "research-job-1",
+                )
+            )
+
+        self.assertTrue(config.tavily.enabled)
+        collector.collect.assert_awaited_once()
+        collected_lead = collector.collect.await_args.args[0]
+        self.assertEqual(
+            collected_lead["company_website"],
+            "https://acme.example",
+        )
+        self.assertEqual(document["summary"], "Acme builds support automation.")
+        self.assertEqual(
+            document["sources"],
+            [{"title": "Acme", "url": "https://acme.example/about"}],
+        )
+
+    def test_tavily_discovered_page_is_scraped_when_website_is_missing(self) -> None:
+        collector_module = importlib.import_module(
+            "agent2_research_analyst.layers.collection.collector"
+        )
+        config = self.agent2_config.ServiceConfig()
+        config.tavily.api_key = "tavily-test-key"
+        config.tavily.enabled = True
+        collector = collector_module.DataCollector(config)
+        result = self.models.SearchResult(
+            title="Acme homepage",
+            snippet="Acme builds support automation.",
+            url="https://acme.example",
+            source="tavily",
+        )
+        collector._collect_web_research = AsyncMock(
+            return_value=("", "Acme builds support automation.", [result])
+        )
+        collector._collect_news = AsyncMock(return_value=[])
+        collector._collect_social = AsyncMock(return_value=({}, []))
+        collector._collect_technology = AsyncMock(return_value={})
+        collector._collect_github = AsyncMock(return_value={})
+        collector._website.scrape = AsyncMock(
+            return_value={"homepage": "Primary-source company details."}
+        )
+
+        raw = asyncio.run(
+            collector.collect({"company_name": "Acme", "full_name": ""})
+        )
+
+        collector._website.scrape.assert_awaited_once_with(
+            "https://acme.example"
+        )
+        self.assertEqual(
+            raw.website_pages,
+            {"homepage": "Primary-source company details."},
+        )
+        self.assertIn("tavily", raw.sources_succeeded)
+        self.assertIn("website", raw.sources_succeeded)
 
 
 class EmailWritingContractTests(unittest.TestCase):
