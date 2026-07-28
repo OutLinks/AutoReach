@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
 from ...config import ServiceConfig
 from ...models import RawResearchData
@@ -44,7 +43,8 @@ class DataCollector:
 
         # Extract fields from lead dict
         website = lead.get("website", "") or lead.get("company_website", "")
-        linkedin_url = lead.get("linkedin_url", "")
+        if website and "website" not in data.sources_attempted:
+            data.sources_attempted.append("website")
         company_name = lead.get("company_name", "")
         lead_name = lead.get("full_name", "") or " ".join(
             part for part in [lead.get("first_name", ""), lead.get("last_name", "")] if part
@@ -70,7 +70,9 @@ class DataCollector:
         if isinstance(website_pages, dict):
             data.website_pages = website_pages
             if website_pages:
-                data.sources_succeeded.append("firecrawl")
+                data.sources_succeeded.append(
+                    "firecrawl" if self._config.firecrawl.is_ready() else "website"
+                )
         elif isinstance(website_pages, Exception):
             logger.warning("DataCollector: website scraper failed — %s", website_pages)
 
@@ -83,6 +85,31 @@ class DataCollector:
                 data.sources_succeeded.append("tavily")
         elif isinstance(web_research, Exception):
             logger.warning("DataCollector: web research failed — %s", web_research)
+
+        # If the lead has no site, let Tavily discover a public page and scrape
+        # it so analysis has primary-source content rather than snippets alone.
+        if not data.website_pages and data.web_search_results:
+            fallback_url = next(
+                (
+                    result.url
+                    for result in data.web_search_results
+                    if result.url.startswith(("http://", "https://"))
+                ),
+                "",
+            )
+            if fallback_url:
+                if "website" not in data.sources_attempted:
+                    data.sources_attempted.append("website")
+                fallback_pages = await self._website.scrape(fallback_url)
+                if fallback_pages:
+                    data.website_pages = fallback_pages
+                    source = (
+                        "firecrawl"
+                        if self._config.firecrawl.is_ready()
+                        else "website"
+                    )
+                    if source not in data.sources_succeeded:
+                        data.sources_succeeded.append(source)
 
         if isinstance(news, list):
             data.news_articles = news
@@ -120,7 +147,7 @@ class DataCollector:
     # ── Individual collectors (each returns a value or raises) ────────────────
 
     async def _collect_website(self, url: str) -> dict:
-        if not url or not self._config.firecrawl.is_ready():
+        if not url:
             return {}
         return await self._website.scrape(url)
 

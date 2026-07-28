@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from orchestrator import Orchestrator, OrchestratorConfig
-from orchestrator.models import DISCOVERED, PipelineLead
+from orchestrator.models import DISCOVERED, NEW, PipelineLead
 from orchestrator.state_machine import STAGE_BY_NAME
 
 from .config_store import ConfigStore, DatabaseLocator
@@ -727,9 +727,30 @@ def create_app(
                         metadata={
                             "lead_search_id": search_id,
                             "source_preview": result,
+                            "search_preview": False,
+                            "imported": True,
                         },
                     )
                 )
+            else:
+                if existing.state == NEW or existing.metadata.get("search_preview"):
+                    existing.state = DISCOVERED
+                existing.email = result.get("email") or existing.email
+                existing.company = result.get("company_name") or existing.company
+                existing.industry = result.get("industry") or existing.industry
+                existing.quality_score = (
+                    (result.get("lead_score") or 0.0) / 100.0
+                    or existing.quality_score
+                )
+                existing.source_job = search_id
+                existing.metadata = {
+                    **existing.metadata,
+                    "lead_search_id": search_id,
+                    "source_preview": result,
+                    "search_preview": False,
+                    "imported": True,
+                }
+                application.state.orchestrator.store.upsert_lead(existing)
             imported.append(lead_id)
         application.state.workflow_store.mark_search_results_imported(
             search_id,
