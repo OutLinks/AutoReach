@@ -39,9 +39,10 @@ class SenderProfileLoader:
             return profile
 
         raise ValueError(
-            "Sender profile not configured. Provide via env vars "
-            "(SENDER_FIRST_NAME, SENDER_LAST_NAME, SENDER_TITLE, "
-            "SENDER_COMPANY, SENDER_EMAIL) or a JSON file."
+            "Sender profile not configured. Set sender_first_name, "
+            "sender_last_name, and sender_email with PATCH /v1/settings. "
+            "Standalone Agent 3 may instead use the equivalent SENDER_* "
+            "environment variables or a JSON profile file."
         )
 
     def _from_file(self, path_str: str) -> Optional[SenderProfile]:
@@ -70,10 +71,7 @@ class SenderProfileLoader:
         default_signature = "\n".join(
             part for part in (f"{first} {last}", title, company) if part
         )
-        signature = os.getenv(
-            "SENDER_SIGNATURE",
-            default_signature,
-        )
+        signature = os.getenv("SENDER_SIGNATURE") or default_signature
 
         return SenderProfile(
             first_name=first,

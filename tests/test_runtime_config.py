@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import importlib
 import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from core.runtime_paths import agent_output_dir, orchestrator_output_dir
+from orchestrator.adapters.live import _load_agent
 from orchestrator.config import OrchestratorConfig
 
 
@@ -42,6 +45,33 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.campaign_model.provider, "openrouter")
         self.assertEqual(config.campaign_model.model, "anthropic/claude-sonnet-4.6")
         self.assertEqual(config.campaign_model.max_tokens, 1600)
+
+
+class RedisConfigurationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unavailable_redis_reports_api_setting_remediation(self) -> None:
+        _load_agent("agent1-lead-finder", "agent1_lead_finder")
+        redis_store = importlib.import_module(
+            "agent1_lead_finder.storage.redis_store"
+        )
+        client = SimpleNamespace(
+            ping=AsyncMock(side_effect=redis_store.RedisError("unavailable")),
+            aclose=AsyncMock(),
+        )
+
+        with patch.object(
+            redis_store.aioredis,
+            "from_url",
+            AsyncMock(return_value=client),
+        ):
+            store = redis_store.RedisStore("redis://redis:6379/0")
+            with self.assertRaisesRegex(
+                ConnectionError,
+                r"set redis_url with PATCH /v1/settings",
+            ):
+                await store.connect()
+
+        client.aclose.assert_awaited_once()
+        self.assertIsNone(store._client)
 
 
 if __name__ == "__main__":

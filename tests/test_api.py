@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import importlib
+import os
 import sqlite3
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from api.main import create_app
 from api.settings import AppSettings
+from orchestrator.adapters.live import _load_agent
 
 
 class ApiTests(unittest.TestCase):
@@ -82,6 +86,64 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(settings["leads_per_day"]["value"], 75)
             self.assertEqual(settings["openai_api_key"]["value"], "")
             self.assertTrue(settings["openai_api_key"]["configured"])
+
+    def test_sender_profile_is_database_backed_and_available_to_live_writer(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with TestClient(create_app(self.settings)) as client:
+                response = client.patch(
+                    "/v1/settings",
+                    json={
+                        "values": {
+                            "sender_email": "januda@example.com",
+                            "sender_first_name": "Januda",
+                            "sender_last_name": "Lelwala",
+                            "sender_title": "Founder",
+                            "sender_company": "AutoReach",
+                            "sender_signature": "Januda\nFounder, AutoReach",
+                            "sender_linkedin_url": "https://linkedin.com/in/januda",
+                            "sender_phone": "+94 00 000 0000",
+                        }
+                    },
+                )
+
+                self.assertEqual(response.status_code, 200, response.text)
+                settings = {item["key"]: item for item in response.json()["items"]}
+                self.assertEqual(settings["sender_first_name"]["value"], "Januda")
+                self.assertEqual(settings["sender_last_name"]["value"], "Lelwala")
+                self.assertEqual(os.environ["SENDER_FIRST_NAME"], "Januda")
+                self.assertEqual(os.environ["SENDER_LAST_NAME"], "Lelwala")
+
+                _load_agent("agent3-email-writer", "agent3_email_writer")
+                sender_profile = importlib.import_module(
+                    "agent3_email_writer.layers.input.sender_profile"
+                )
+                profile = sender_profile.SenderProfileLoader().load()
+                self.assertEqual(profile.full_name, "Januda Lelwala")
+                self.assertEqual(profile.company, "AutoReach")
+                self.assertEqual(profile.signature, "Januda\nFounder, AutoReach")
+
+    def test_redis_url_is_database_backed_and_available_to_live_lead_finder(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with TestClient(create_app(self.settings)) as client:
+                response = client.patch(
+                    "/v1/settings",
+                    json={"values": {"redis_url": "redis://redis:6379/0"}},
+                )
+
+                self.assertEqual(response.status_code, 200, response.text)
+                settings = {item["key"]: item for item in response.json()["items"]}
+                self.assertEqual(
+                    settings["redis_url"]["value"], "redis://redis:6379/0"
+                )
+                self.assertEqual(os.environ["REDIS_URL"], "redis://redis:6379/0")
+
+                lead_finder = _load_agent(
+                    "agent1-lead-finder", "agent1_lead_finder"
+                )
+                self.assertEqual(
+                    lead_finder.ServiceConfig().redis_url,
+                    "redis://redis:6379/0",
+                )
 
     def test_agents_and_orchestrator_have_explicit_control_endpoints(self) -> None:
         with TestClient(create_app(self.settings)) as client:
