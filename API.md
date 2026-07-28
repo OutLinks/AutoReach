@@ -35,6 +35,7 @@ curl -sS -X POST http://127.0.0.1:8000/v1/setup \
     "database_path": "/data/autoreach.db",
     "settings": {
       "simulate": true,
+      "redis_url": "redis://redis:6379/0",
       "scheduler_timezone": "UTC"
     }
   }'
@@ -42,6 +43,10 @@ curl -sS -X POST http://127.0.0.1:8000/v1/setup \
 
 Settings and credentials are written through `PATCH /v1/settings`; they do not
 need to be placed in a frontend environment file.
+
+Live email writing requires `sender_first_name`, `sender_last_name`, and
+`sender_email`. Optional sender identity settings include `sender_title`,
+`sender_company`, `sender_signature`, `sender_linkedin_url`, and `sender_phone`.
 
 ## Agent control
 

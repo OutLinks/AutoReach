@@ -6,7 +6,7 @@ no bundled frontend and currently performs no authentication.
 > Do not publish this version directly to the internet. Anyone who can reach it
 > can change provider credentials, start agents, and trigger live sending.
 
-## 1. Create the deployment files
+## 1. Create the deployment directory
 
 ```bash
 sudo mkdir -p /opt/autoreach
@@ -14,15 +14,7 @@ sudo chown "$USER":"$USER" /opt/autoreach
 cd /opt/autoreach
 ```
 
-Create `.env`:
-
-```env
-AUTOREACH_ENV=production
-AUTOREACH_DATA_DIR=/data
-AUTOREACH_SCHEDULER_INTERVAL_SECONDS=30
-```
-
-Create `compose.yaml`:
+Copy the repository's `compose.yaml` to this directory, or create it with:
 
 ```yaml
 services:
@@ -32,18 +24,23 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   autoreach:
     image: janudax/autoreach:latest
     pull_policy: always
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      AUTOREACH_ENV: production
       AUTOREACH_DATA_DIR: /data
+      AUTOREACH_SCHEDULER_INTERVAL_SECONDS: "30"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -65,6 +62,10 @@ volumes:
   autoreach_data:
   redis_data:
 ```
+
+Provider credentials, sender identity, Redis URL, and other operational
+configuration are not stored in this file. They are stored in the selected
+SQLite database and managed through the API.
 
 ## 2. Pull and start
 
@@ -105,6 +106,7 @@ curl -sS -X POST http://localhost:8000/v1/setup \
     "database_path": "/data/autoreach.db",
     "settings": {
       "simulate": true,
+      "redis_url": "redis://redis:6379/0",
       "scheduler_timezone": "UTC"
     }
   }'
@@ -112,6 +114,25 @@ curl -sS -X POST http://localhost:8000/v1/setup \
 
 Configure providers using `PATCH /v1/settings`. The values are stored in the
 selected SQLite database, not in the environment file.
+
+For an existing installation, select the Compose Redis service and configure the
+sender identity through the API:
+
+```bash
+curl -sS -X PATCH http://localhost:8000/v1/settings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "values": {
+      "redis_url": "redis://redis:6379/0",
+      "sender_first_name": "Jane",
+      "sender_last_name": "Doe",
+      "sender_title": "Founder",
+      "sender_company": "Example Company",
+      "sender_email": "jane@example.com",
+      "sender_signature": "Jane Doe\nFounder, Example Company"
+    }
+  }'
+```
 
 ## 5. Control agents and the orchestrator
 

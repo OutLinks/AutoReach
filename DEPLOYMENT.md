@@ -37,6 +37,7 @@ curl -sS -X POST http://127.0.0.1:8000/v1/setup \
     "database_path": "/data/autoreach.db",
     "settings": {
       "simulate": true,
+      "redis_url": "redis://redis:6379/0",
       "scheduler_timezone": "UTC"
     }
   }'
@@ -92,17 +93,18 @@ GitHub Actions runs tests, publishes a multi-architecture Docker image, and
 deploys successful `main` builds to the VPS. See [CICD.md](CICD.md) for the
 required GitHub secrets, deployment key, and one-time Compose configuration.
 
-## Docker
+## Docker Compose
 
 ```bash
-docker build -t autoreach-api .
-docker run --rm \
-  -p 127.0.0.1:8000:8000 \
-  -e AUTOREACH_ENV=production \
-  -e AUTOREACH_DATA_DIR=/data \
-  -v autoreach_data:/data \
-  autoreach-api
+docker compose pull
+docker compose up -d
+docker compose ps
 ```
+
+The repository's `compose.yaml` runs the API and its Redis working queue. Redis
+is internal to the Compose network; only the API is bound on
+`127.0.0.1:8000`. Set `redis_url` to `redis://redis:6379/0` through
+`POST /v1/setup` or `PATCH /v1/settings`.
 
 Keep one Uvicorn worker and one service instance while SQLite is used.
 

@@ -27,10 +27,13 @@ logger = logging.getLogger(__name__)
 # errors surface only when RedisStore is actually instantiated.
 try:
     import redis.asyncio as aioredis
+    from redis.exceptions import RedisError
+
     _REDIS_AVAILABLE = True
 except ImportError:
     _REDIS_AVAILABLE = False
     aioredis = None  # type: ignore
+    RedisError = Exception  # type: ignore[misc,assignment]
 
 
 class RedisStore:
@@ -55,6 +58,15 @@ class RedisStore:
             self._client = await aioredis.from_url(
                 self._url, encoding="utf-8", decode_responses=True
             )
+            try:
+                await self._client.ping()
+            except RedisError as exc:
+                await self._client.aclose()
+                self._client = None
+                raise ConnectionError(
+                    "Redis working queue is unavailable. Start the Redis service "
+                    "and set redis_url with PATCH /v1/settings."
+                ) from exc
             logger.debug("Redis connected: %s", self._url)
 
     async def disconnect(self) -> None:

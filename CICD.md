@@ -63,35 +63,32 @@ Verify the key before relying on the workflow:
 ssh -i autoreach-github-deploy root@169.58.69.5
 ```
 
-## One-time VPS Compose change
+## One-time VPS Compose setup
 
-The deployment workflow updates the `latest` tag. On the VPS, edit
-`/root/outreach-agent/compose.yaml` and use:
-
-```yaml
-services:
-  autoreach:
-    image: janudax/autoreach:latest
-    pull_policy: always
-```
-
-Keep the existing environment, dependencies, volume, health check, and private
-port binding:
-
-```yaml
-ports:
-  - "127.0.0.1:8000:8000"
-```
+The deployment workflow updates the `latest` tag. Copy the repository's
+`compose.yaml` to `/root/outreach-agent/compose.yaml`. It runs both AutoReach and
+its Redis working queue, preserves their data in named volumes, and binds the API
+privately on `127.0.0.1:8000`.
 
 Validate the file:
 
 ```bash
 cd /root/outreach-agent
 docker compose config
+docker compose up -d
 ```
 
 The Docker and Compose commands must work for `VPS_USER` without an interactive
 password prompt.
+
+Operational settings remain in SQLite. Configure the Docker-network Redis URL
+once through the API:
+
+```bash
+curl -sS -X PATCH http://127.0.0.1:8000/v1/settings \
+  -H "Content-Type: application/json" \
+  -d '{"values":{"redis_url":"redis://redis:6379/0"}}'
+```
 
 ## First deployment
 
