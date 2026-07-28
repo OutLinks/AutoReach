@@ -35,6 +35,9 @@ jobs:
       - name: Run test suite
         run: python -m unittest discover -s tests -v
 
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+
   publish:
     name: Publish Docker image
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -90,6 +93,9 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
       - name: Configure SSH
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -102,13 +108,27 @@ jobs:
           ssh-keyscan -p "${VPS_PORT:-22}" -H "$VPS_HOST" \
             >> "$HOME/.ssh/known_hosts"
 
-      - name: Pull and restart AutoReach
+      - name: Upload Compose definition
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          scp \
+            -o BatchMode=yes \
+            -i "$HOME/.ssh/autoreach-deploy" \
+            -P "${VPS_PORT:-22}" \
+            compose.yaml \
+            "$VPS_USER@$VPS_HOST:/root/outreach-agent/compose.yaml.next"
+
+      - name: Pull and restart AutoReach with Redis
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
           VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           ssh \
+            -o BatchMode=yes \
             -i "$HOME/.ssh/autoreach-deploy" \
             -p "${VPS_PORT:-22}" \
             "$VPS_USER@$VPS_HOST" \
@@ -116,7 +136,11 @@ jobs:
           set -Eeuo pipefail
           cd /root/outreach-agent
 
-          docker compose pull autoreach
+          docker compose -f compose.yaml.next config --quiet
+          mv compose.yaml.next compose.yaml
+          docker compose pull
+          docker compose up -d redis
+          docker compose exec -T redis redis-cli ping | grep -qx PONG
           docker compose up -d --force-recreate autoreach
 
           for attempt in $(seq 1 20); do
@@ -127,7 +151,7 @@ jobs:
             sleep 3
           done
 
-          docker compose logs --tail=100 autoreach
+          docker compose logs --tail=100 redis autoreach
           exit 1
           REMOTE
 

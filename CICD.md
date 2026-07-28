@@ -63,23 +63,21 @@ Verify the key before relying on the workflow:
 ssh -i autoreach-github-deploy root@169.58.69.5
 ```
 
-## One-time VPS Compose setup
+## VPS Compose deployment
 
-The deployment workflow updates the `latest` tag. Copy the repository's
-`compose.yaml` to `/root/outreach-agent/compose.yaml`. It runs both AutoReach and
-its Redis working queue, preserves their data in named volumes, and binds the API
-privately on `127.0.0.1:8000`.
+The deployment workflow uploads the repository's `compose.yaml` to
+`/root/outreach-agent/compose.yaml`, validates it, and then updates the complete
+stack. It runs both AutoReach and its Redis working queue, preserves their data
+in named volumes, and binds the API privately on `127.0.0.1:8000`.
 
-Validate the file:
+The deployment directory must exist before the first deployment:
 
 ```bash
-cd /root/outreach-agent
-docker compose config
-docker compose up -d
+mkdir -p /root/outreach-agent
 ```
 
 The Docker and Compose commands must work for `VPS_USER` without an interactive
-password prompt.
+password prompt. The current workflow expects `VPS_USER=root`.
 
 Operational settings remain in SQLite. Configure the Docker-network Redis URL
 once through the API:
