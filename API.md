@@ -48,6 +48,17 @@ Live email writing requires `sender_first_name`, `sender_last_name`, and
 `sender_email`. Optional sender identity settings include `sender_title`,
 `sender_company`, `sender_signature`, `sender_linkedin_url`, and `sender_phone`.
 
+Live lead discovery requires at least one discovery source:
+
+- configure `tavily_api_key` for public web search;
+- configure one or more public pages in `lead_finder_source_urls`; or
+- include a public company/directory URL in the search query.
+
+The `tavily_enabled` toggle is database-backed and defaults to enabled, but web
+search runs only when its key is configured. MVP lead discovery does not use
+Apollo, Google Places, or other structured lead databases; those services are
+outside the web-search and web-scraping discovery path.
+
 ## Agent control
 
 `GET /v1/agents` returns the available agents and their stages.

@@ -145,6 +145,42 @@ class ApiTests(unittest.TestCase):
                     "redis://redis:6379/0",
                 )
 
+    def test_lead_discovery_providers_are_database_backed(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with TestClient(create_app(self.settings)) as client:
+                response = client.patch(
+                    "/v1/settings",
+                    json={
+                        "values": {
+                            "tavily_api_key": "database-tavily-key",
+                            "tavily_enabled": True,
+                            "lead_finder_source_urls": (
+                                "https://example.com/directory,"
+                                "https://example.org/companies"
+                            ),
+                        }
+                    },
+                )
+
+                self.assertEqual(response.status_code, 200, response.text)
+                settings = {item["key"]: item for item in response.json()["items"]}
+                self.assertTrue(settings["tavily_api_key"]["configured"])
+                self.assertEqual(settings["tavily_api_key"]["value"], "")
+                self.assertTrue(settings["tavily_enabled"]["value"])
+
+                lead_finder = _load_agent(
+                    "agent1-lead-finder", "agent1_lead_finder"
+                )
+                config = lead_finder.ServiceConfig()
+                self.assertEqual(config.enabled_search_apis(), ["tavily"])
+                self.assertEqual(
+                    config.web_scraper_seed_urls,
+                    [
+                        "https://example.com/directory",
+                        "https://example.org/companies",
+                    ],
+                )
+
     def test_agents_and_orchestrator_have_explicit_control_endpoints(self) -> None:
         with TestClient(create_app(self.settings)) as client:
             agents = client.get("/v1/agents")

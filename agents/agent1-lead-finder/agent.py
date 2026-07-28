@@ -22,7 +22,7 @@ import re
 from datetime import datetime
 from uuid import uuid4
 
-from core.model_selection import Message, ModelConfig, get_model
+from core.model_selection import Message, get_model
 
 from .config import ServiceConfig
 from .engines.enrich.engine import EnrichEngine
@@ -42,7 +42,7 @@ class LeadFinderAgent:
 
     Usage:
         config = ServiceConfig()
-        config.google_places.enabled = False  # turn off Google Places for this run
+        config.tavily.enabled = False  # run only against explicitly supplied URLs
 
         agent = LeadFinderAgent(config)
         job = await agent.run("Find 50 real estate founders in San Francisco")
