@@ -59,6 +59,12 @@ search runs only when its key is configured. MVP lead discovery does not use
 Apollo, Google Places, or other structured lead databases; those services are
 outside the web-search and web-scraping discovery path.
 
+Web-search results are candidate URLs, not leads. Each candidate must be scraped
+successfully and expose a company-domain email before it is returned. MVP lead
+records include `company_name`, `email`, `company_description`,
+`company_website`, and the public URLs used as evidence; records without a
+public company-domain email are omitted.
+
 ## Agent control
 
 `GET /v1/agents` returns the available agents and their stages.

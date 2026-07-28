@@ -360,7 +360,8 @@ OUTPUT: 50 verified leads in Airtable:
 
 ### Public Web Scraper
 - Starts from company or directory URLs supplied in a query or Runtime Settings
-- Follows direct public company links and extracts public company/contact details
+- Scrapes web-search candidates plus public About/Contact pages
+- Returns only companies with a public company-domain email and description
 - Does not use structured lead databases or bypass access controls
 
 ## Enrichment

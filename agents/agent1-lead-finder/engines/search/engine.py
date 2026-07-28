@@ -54,42 +54,72 @@ class SearchEngine(BaseEngine):
                 "or include a public company or directory URL in the search query."
             )
 
-        per_source = max(1, criteria.max_results // task_count)
-
         tasks: list[asyncio.Task] = []
-        active_sources: list[str] = []
+        task_names: list[str] = []
+        scraper = WebScraperAdapter()
         if source_count:
-            adapter = WebScraperAdapter()
             tasks.append(asyncio.create_task(
-                self._guarded(adapter.search(criteria, source_urls, per_source)),
+                self._guarded(
+                    scraper.search(criteria, source_urls, criteria.max_results)
+                ),
                 name="web_scraper",
             ))
-            active_sources.append("web_scraper")
+            task_names.append("web_scraper")
         if "tavily" in enabled_apis:
             adapter = TavilyAdapter(self._config.tavily.api_key)
+            candidate_limit = min(max(criteria.max_results * 5, 10), 20)
             tasks.append(asyncio.create_task(
-                self._guarded(adapter.search(criteria, per_source)),
+                self._guarded(adapter.search(criteria, candidate_limit)),
                 name="tavily",
             ))
-            active_sources.append("tavily")
+            task_names.append("tavily")
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         all_leads: list[Lead] = []
-        for result in results:
+        for task_name, result in zip(task_names, results):
             if isinstance(result, Exception):
-                logger.error("Search task raised: %s", result)
-            elif isinstance(result, list):
+                logger.error("%s task raised: %s", task_name, result)
+            elif task_name == "web_scraper" and isinstance(result, list):
                 all_leads.extend(result)
+            elif task_name == "tavily" and isinstance(result, list):
+                candidate_urls = [
+                    lead.company_website
+                    for lead in result
+                    if isinstance(lead, Lead) and lead.company_website
+                ]
+                scraped = await self._guarded(
+                    scraper.scrape_companies(
+                        criteria,
+                        candidate_urls,
+                        criteria.max_results,
+                    )
+                )
+                for lead in scraped:
+                    lead.merge_source("tavily")
+                all_leads.extend(scraped)
 
-        # Trim to requested max
-        all_leads = all_leads[: criteria.max_results]
+        all_leads = self._deduplicate(all_leads)[: criteria.max_results]
 
         # Persist to Redis
         await self._store.push_leads(job_id, "raw", all_leads)
 
         logger.info(
             "SearchEngine: %d total leads found  (sources=%s)",
-            len(all_leads), active_sources,
+            len(all_leads), task_names,
         )
         return all_leads
+
+    @staticmethod
+    def _deduplicate(leads: list[Lead]) -> list[Lead]:
+        unique: list[Lead] = []
+        seen: set[str] = set()
+        for lead in leads:
+            if not lead.email or not lead.company_description:
+                continue
+            key = (lead.company_domain or lead.email).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(lead)
+        return unique
