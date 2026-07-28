@@ -4,7 +4,7 @@ import asyncio
 import importlib
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from orchestrator.adapters.live import _load_agent, _relax_simulated_pacing
 from orchestrator.campaigns import (
@@ -31,23 +31,34 @@ class WebScraperContractTests(unittest.TestCase):
 
     def test_explicit_sources_are_preserved_before_discovered_links(self) -> None:
         ai_ceylon = "https://www.aiceylon.com/careers"
-        bjak = (
-            "https://jobs.ashbyhq.com/bjakcareer/"
-            "46b27111-9003-4ce3-8333-1e53e3d6611f"
-        )
+        bjak = "https://bjak.com/careers"
+        bjak_contact = "https://bjak.com/contact"
 
         ai_page = self.search._PageParser()
         ai_page.feed(
             """
             <title>Careers — AI Ceylon — AI Ceylon</title>
             <meta property="og:site_name" content="AI Ceylon">
+            <meta name="description" content="AI services company">
             <a href="https://unrelated.example/jobs">external</a>
             hello@aiceylon.com
             """
         )
         bjak_page = self.search._PageParser()
-        bjak_page.feed("<title>Jobs</title>")
-        pages = {ai_ceylon: ai_page, bjak: bjak_page}
+        bjak_page.feed(
+            """
+            <title>Bjak Careers</title>
+            <meta name="description" content="Financial technology company">
+            <a href="/contact">Contact</a>
+            """
+        )
+        bjak_contact_page = self.search._PageParser()
+        bjak_contact_page.feed("Contact hello@bjak.com")
+        pages = {
+            ai_ceylon: ai_page,
+            bjak: bjak_page,
+            bjak_contact: bjak_contact_page,
+        }
 
         async def fake_fetch(_client, url):
             return pages.get(url)
@@ -67,7 +78,38 @@ class WebScraperContractTests(unittest.TestCase):
         leads = asyncio.run(run())
         self.assertEqual([lead.company_name for lead in leads], ["AI Ceylon", "Bjak"])
         self.assertEqual(leads[0].email, "hello@aiceylon.com")
+        self.assertEqual(leads[1].email, "hello@bjak.com")
+        self.assertEqual(
+            leads[1].company_description,
+            "Financial technology company",
+        )
         self.assertEqual([lead.company_website for lead in leads], [ai_ceylon, bjak])
+
+    def test_scraper_rejects_third_party_email_and_navigation_domains(self) -> None:
+        page = self.search._PageParser()
+        page.feed(
+            """
+            <title>Example Company</title>
+            <meta name="description" content="Example description">
+            <a href="https://startupschool.org/">Navigation</a>
+            unrelated@gmail.com
+            """
+        )
+
+        self.assertEqual(
+            self.search.WebScraperAdapter._external_company_links(
+                "https://example.com",
+                page.links,
+            ),
+            [],
+        )
+        self.assertIsNone(
+            self.search.WebScraperAdapter._map_pages(
+                "https://example.com",
+                [("https://example.com", page)],
+                self.models.SearchCriteria(),
+            )
+        )
 
     def test_known_compound_brand_capitalization_is_preserved(self) -> None:
         self.assertEqual(
@@ -75,6 +117,66 @@ class WebScraperContractTests(unittest.TestCase):
                 "https://jobs.ashbyhq.com/openrouter/job-id"
             ),
             "OpenRouter",
+        )
+
+
+class SearchEngineContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.agent1 = _load_agent("agent1-lead-finder", "agent1_lead_finder")
+        cls.engine = importlib.import_module(
+            "agent1_lead_finder.engines.search.engine"
+        )
+
+    def test_tavily_candidates_are_scraped_before_becoming_leads(self) -> None:
+        raw_result = self.agent1.Lead(
+            company_name="Search result",
+            company_website="https://example.com",
+            company_description="Unverified search snippet",
+            sources=["tavily"],
+        )
+        scraped_lead = self.agent1.Lead(
+            company_name="Example",
+            company_website="https://example.com/",
+            company_domain="example.com",
+            company_description="Public company description",
+            email="hello@example.com",
+            sources=["web_scraper"],
+        )
+        tavily = SimpleNamespace(search=AsyncMock(return_value=[raw_result]))
+        scraper = SimpleNamespace(
+            search=AsyncMock(return_value=[]),
+            scrape_companies=AsyncMock(return_value=[scraped_lead]),
+        )
+        store = SimpleNamespace(push_leads=AsyncMock())
+        config = self.agent1.ServiceConfig()
+        config.tavily.api_key = "test-key"
+        config.tavily.enabled = True
+        config.web_scraper_seed_urls = []
+
+        async def run():
+            with (
+                patch.object(self.engine, "TavilyAdapter", return_value=tavily),
+                patch.object(self.engine, "WebScraperAdapter", return_value=scraper),
+            ):
+                return await self.engine.SearchEngine(config, store).run(
+                    self.agent1.SearchCriteria(max_results=3),
+                    "web-search-job",
+                )
+
+        leads = asyncio.run(run())
+
+        self.assertEqual(leads, [scraped_lead])
+        scraper.scrape_companies.assert_awaited_once_with(
+            ANY,
+            ["https://example.com"],
+            3,
+        )
+        self.assertIn("tavily", leads[0].sources)
+        store.push_leads.assert_awaited_once_with(
+            "web-search-job",
+            "raw",
+            leads,
         )
 
 

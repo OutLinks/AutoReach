@@ -614,6 +614,10 @@ class WorkflowRunner:
                 "full_name": f"Lead {index + 1} Preview",
                 "email": f"preview{index + 1}@example.invalid",
                 "company_name": f"{industry} Company {index + 1}",
+                "company_description": (
+                    f"Simulated public-web description for "
+                    f"{industry} Company {index + 1}."
+                ),
                 "industry": industry,
                 "company_size": size,
                 "city": location,

@@ -80,7 +80,7 @@ class TavilyAdapter:
             query = f"{query} {' OR '.join(criteria.locations)}"
         if criteria.technologies:
             query = f"{query} using {' OR '.join(criteria.technologies)}"
-        return query
+        return f"{query} official company website contact email"
 
     @staticmethod
     def _map_result(
