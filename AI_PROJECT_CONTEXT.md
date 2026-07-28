@@ -135,7 +135,7 @@ Default agent configurations use `anthropic` / `claude-sonnet-4-6`, but each age
 
 Entrypoint: `LeadFinderAgent.run(prompt, job_id=None)` in [agents/agent1-lead-finder/agent.py](agents/agent1-lead-finder/agent.py).
 
-- Engines: search (`Google Places`, `Tavily`), enrich (`Hunter`, `Wappalyzer`, `Crunchbase`, domain intelligence), verify (`Abstract`), then score/deduplicate.
+- Engines: public web search (`Tavily`) and web scraping for discovery, then optional enrich (`Hunter`, `Wappalyzer`, `Crunchbase`, domain intelligence), verify (`Abstract`), and score/deduplicate.
 - Stores job data in Redis (`REDIS_URL`, default `redis://localhost:6379`) and produces lead artifacts under `agents/agent1-lead-finder/output/`, including `leads_*.jsonl` expected by the live adapter.
 - Primary tuning/configuration: [agents/agent1-lead-finder/config.py](agents/agent1-lead-finder/config.py). API sections are enabled only when both enabled and credentialed.
 - Lead data models: `Lead`, `SearchCriteria`, `SearchJob`.
@@ -205,7 +205,7 @@ Never commit `.env`: it and `.env.*` are ignored. Relevant variables include:
 | Area | Variables |
 | --- | --- |
 | LLMs | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` |
-| Lead finding | `GOOGLE_PLACES_API_KEY`, `TAVILY_API_KEY`, `HUNTER_API_KEY`, `ABSTRACT_API_KEY`, `WAPPALYZER_API_KEY`, `CRUNCHBASE_API_KEY`, `WHOISXML_API_KEY`, `SECURITYTRAILS_API_KEY`, `REDIS_URL` |
+| Lead finding | `TAVILY_API_KEY`, `LEAD_FINDER_SOURCE_URLS`, `HUNTER_API_KEY`, `ABSTRACT_API_KEY`, `WAPPALYZER_API_KEY`, `CRUNCHBASE_API_KEY`, `WHOISXML_API_KEY`, `SECURITYTRAILS_API_KEY`, `REDIS_URL` |
 | Research | `FIRECRAWL_API_KEY`, `GNEWS_API_KEY`, `GITHUB_API_KEY` plus `TAVILY_API_KEY` / `WAPPALYZER_API_KEY` |
 | Sender identity | `SENDER_EMAIL`, `SENDER_FROM_NAME`, `SENDER_FIRST_NAME`, `SENDER_LAST_NAME`, `SENDER_TITLE`, `SENDER_COMPANY`, `SENDER_SIGNATURE`, `SENDER_LINKEDIN_URL`, `SENDER_PHONE` |
 | Agent 4 mode/accounts | `AGENT4_PROVIDER`, `AGENT4_SIMULATE`, `AGENT4_ACCOUNTS_FILE` |

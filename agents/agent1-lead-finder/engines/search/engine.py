@@ -15,7 +15,6 @@ from ...config import ServiceConfig
 from ...models import Lead, SearchCriteria
 from ...storage import RedisStore
 from ..base import BaseEngine
-from .google_places import GooglePlacesAdapter
 from .tavily import TavilyAdapter
 from .web_scraper import WebScraperAdapter
 
@@ -49,12 +48,11 @@ class SearchEngine(BaseEngine):
         source_count = int(self._config.web_scraper_enabled and bool(source_urls))
         task_count = source_count + len(enabled_apis)
         if not task_count:
-            logger.warning(
-                "No scrape source URLs were supplied and no optional discovery APIs are enabled. "
-                "Add public company/directory URLs to the prompt or LEAD_FINDER_SOURCE_URLS."
+            raise ValueError(
+                "No web discovery source is configured. Add a Tavily API key "
+                "with PATCH /v1/settings, configure lead_finder_source_urls, "
+                "or include a public company or directory URL in the search query."
             )
-            await self._store.push_leads(job_id, "raw", [])
-            return []
 
         per_source = max(1, criteria.max_results // task_count)
 
@@ -67,13 +65,6 @@ class SearchEngine(BaseEngine):
                 name="web_scraper",
             ))
             active_sources.append("web_scraper")
-        if "google_places" in enabled_apis:
-            adapter = GooglePlacesAdapter(self._config.google_places.api_key)
-            tasks.append(asyncio.create_task(
-                self._guarded(adapter.search(criteria, per_source)),
-                name="google_places",
-            ))
-            active_sources.append("google_places")
         if "tavily" in enabled_apis:
             adapter = TavilyAdapter(self._config.tavily.api_key)
             tasks.append(asyncio.create_task(

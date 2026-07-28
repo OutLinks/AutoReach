@@ -353,30 +353,21 @@ OUTPUT: 50 verified leads in Airtable:
 
 ## Data Sources
 
-### Google Places API (Primary Business Discovery)
-- Find local and regional businesses by category and location
-- Returns: business name, website, phone, address, reviews, ratings, categories, hours
-- Best for agencies, realtors, dentists, lawyers, restaurants, and office-based companies
-
-### Tavily Search API (AI Search)
-- Find web-first companies, context, competitors, pain points, and recent public pages
+### Tavily Search API (Public Web Search)
+- Find companies, context, competitors, pain points, and recent public pages
 - Returns: search results, AI summaries, relevant pages, and snippets
-- Best for SaaS, startups, niche B2B categories, and broader market research
+- Handles natural-language lead searches when a Tavily key is configured
 
-### Firecrawl / Crawl4AI (Website Crawling)
-- Convert company websites into structured markdown
-- Scrape homepage, about, pricing, team, careers, blog, and case studies
-- Firecrawl is the hosted default; Crawl4AI is the self-hosted alternative
-
-### GitHub API (Software Company Research)
-- Research repositories, languages, contributors, releases, stars, and activity
-- Useful for B2B SaaS and developer-tool leads
+### Public Web Scraper
+- Starts from company or directory URLs supplied in a query or Runtime Settings
+- Follows direct public company links and extracts public company/contact details
+- Does not use structured lead databases or bypass access controls
 
 ## Enrichment
 
 | Field | Source | Why |
 |-------|--------|-----|
-| Website | Google Places / Tavily | For research |
+| Website | Tavily / public web scraper | For research |
 | Email | Hunter Domain Search | Contact discovery |
 | Email verification | Abstract Email Validation | Deliverability |
 | Technologies | Wappalyzer | Pain point inference |
@@ -424,7 +415,6 @@ Check before adding:
 
 | Tool | Free | Paid |
 |------|------|------|
-| Google Places API | Low/free usage | Usage-based |
 | Tavily | Free tier | Low monthly/API usage |
 | Hunter Domain Search | Free tier | Paid tiers |
 | Abstract Email Validation | Free tier | Low monthly/API usage |

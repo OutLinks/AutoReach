@@ -74,5 +74,27 @@ class RedisConfigurationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(store._client)
 
 
+class LeadDiscoveryConfigurationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_search_without_a_provider_or_source_reports_configuration_error(
+        self,
+    ) -> None:
+        lead_finder = _load_agent(
+            "agent1-lead-finder", "agent1_lead_finder"
+        )
+        search_engine = importlib.import_module(
+            "agent1_lead_finder.engines.search.engine"
+        )
+        config = lead_finder.ServiceConfig()
+        config.web_scraper_seed_urls = []
+        config.tavily.api_key = ""
+        engine = search_engine.SearchEngine(config, SimpleNamespace())
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Add a Tavily API key with PATCH /v1/settings",
+        ):
+            await engine.run(lead_finder.SearchCriteria(), "job-without-source")
+
+
 if __name__ == "__main__":
     unittest.main()

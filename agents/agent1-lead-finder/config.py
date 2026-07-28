@@ -3,13 +3,12 @@ Service configuration for Agent 1: Lead Finder.
 
 The lead finder is scrape-first: it discovers companies from public URLs and
 directories supplied in the prompt or `LEAD_FINDER_SOURCE_URLS`. External APIs
-are optional enrichments and are disabled by default. Toggle an API's
-`enabled` flag to opt in; it will still run only when a key is configured.
+are optional and run only when both their toggle and credential are configured.
 
 Load from environment variables or override programmatically:
 
     config = ServiceConfig()              # reads from env vars
-    config.tavily.enabled = True          # opt in to Tavily discovery
+    config.tavily.enabled = False         # temporarily disable web search
     config.hunter.enabled = True          # opt in to Hunter enrichment
 """
 
@@ -22,6 +21,15 @@ from core.env import load_dotenv
 from core.model_selection import ModelConfig, model_config_from_env
 
 load_dotenv()
+
+
+def _enabled(name: str) -> bool:
+    return os.environ.get(name, "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 @dataclass
@@ -45,11 +53,11 @@ class ServiceConfig:
     or pages that link directly to company websites, either in the user prompt
     or with `LEAD_FINDER_SOURCE_URLS` (comma- or newline-separated).
 
-    Every third-party API starts disabled. Flip its `enabled` flag to `True`
-    only when that paid/credentialed capability is wanted.
+    Every third-party API requires a credential and can be disabled with its
+    database-backed `<PROVIDER>_ENABLED` setting.
 
     Environment variables (set in .env or shell):
-        GOOGLE_PLACES_API_KEY, TAVILY_API_KEY,
+        TAVILY_API_KEY,
         HUNTER_API_KEY, ABSTRACT_API_KEY,
         WAPPALYZER_API_KEY, CRUNCHBASE_API_KEY,
         WHOISXML_API_KEY, SECURITYTRAILS_API_KEY,
@@ -58,41 +66,37 @@ class ServiceConfig:
     """
 
     # ── Search APIs (Module 1) ─────────────────────────────────────────────
-    google_places: APIConfig = field(default_factory=lambda: APIConfig(
-        api_key=os.environ.get("GOOGLE_PLACES_API_KEY", ""),
-        enabled=False,
-    ))
     tavily: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("TAVILY_API_KEY", ""),
-        enabled=False,
+        enabled=_enabled("TAVILY_ENABLED"),
     ))
 
     # ── Enrich APIs (Module 2) ─────────────────────────────────────────────
     hunter: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("HUNTER_API_KEY", ""),
-        enabled=False,
+        enabled=_enabled("HUNTER_ENABLED"),
     ))
     wappalyzer: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("WAPPALYZER_API_KEY", ""),
-        enabled=False,
+        enabled=_enabled("WAPPALYZER_ENABLED"),
     ))
     crunchbase: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("CRUNCHBASE_API_KEY", ""),
-        enabled=False,
+        enabled=_enabled("CRUNCHBASE_ENABLED"),
     ))
     whoisxml: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("WHOISXML_API_KEY", ""),
-        enabled=False,
+        enabled=_enabled("WHOISXML_ENABLED"),
     ))
     securitytrails: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("SECURITYTRAILS_API_KEY", ""),
-        enabled=False,
+        enabled=_enabled("SECURITYTRAILS_ENABLED"),
     ))
 
     # ── Verify APIs (Module 3) ─────────────────────────────────────────────
     abstract: APIConfig = field(default_factory=lambda: APIConfig(
         api_key=os.environ.get("ABSTRACT_API_KEY", ""),
-        enabled=False,
+        enabled=_enabled("ABSTRACT_ENABLED"),
     ))
 
     # ── LLM ───────────────────────────────────────────────────────────────
@@ -123,8 +127,6 @@ class ServiceConfig:
 
     def enabled_search_apis(self) -> list[str]:
         apis = []
-        if self.google_places.is_ready():
-            apis.append("google_places")
         if self.tavily.is_ready():
             apis.append("tavily")
         return apis

@@ -27,15 +27,6 @@ _WEB_SCRAPER_CARD = """\
 
 
 _API_CARDS: dict[str, str] = {
-    "google_places": """\
-### GOOGLE PLACES  [search]
-- **Best for**: Local and regional business discovery by category and location
-- **Returns**: Business name, website, phone, address, ratings, categories, hours
-- **Prefer when**: Searching agencies, realtors, dentists, lawyers, restaurants, \
-local services, or companies with physical offices
-- **Limitation**: Does not return employee emails; Hunter Domain Search runs later
-""",
-
     "tavily": """\
 ### TAVILY  [search]
 - **Best for**: AI-oriented public web search and company context discovery
@@ -182,18 +173,10 @@ def build_system_prompt(config: ServiceConfig) -> str:
 
     # Build API selection guidance based on what's actually available
     api_guidance_lines: list[str] = []
-    if "google_places" in search_apis and "tavily" in search_apis:
+    if "tavily" in search_apis:
         api_guidance_lines.append(
-            "- Use **Google Places** first for local/business-category searches; "
-            "use **Tavily** for web-first, startup, SaaS, competitor, or pain-point searches"
-        )
-    elif "google_places" in search_apis:
-        api_guidance_lines.append(
-            "- **Google Places** is the only active search API — use it for business discovery"
-        )
-    elif "tavily" in search_apis:
-        api_guidance_lines.append(
-            "- **Tavily** is the only active search API — use it for web-first discovery"
+            "- Use **Tavily** for public web search; structured business databases "
+            "are outside the MVP discovery path"
         )
 
     if config.web_scraper_enabled:
@@ -202,7 +185,9 @@ def build_system_prompt(config: ServiceConfig) -> str:
             "it is the default discovery method and does not belong in `api_priorities`"
         )
     if not search_apis:
-        api_guidance_lines.append("- **No optional search APIs are active** — set `api_priorities: []`")
+        api_guidance_lines.append(
+            "- **Web search is not configured** — use supplied public URLs for scrape-only discovery"
+        )
 
     api_guidance = "\n".join(api_guidance_lines) if api_guidance_lines else ""
 
