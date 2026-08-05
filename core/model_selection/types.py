@@ -23,6 +23,9 @@ class Message:
     tool_call_id: str | None = None
     # Populated only for role="tool" — the tool name (required by some providers)
     name: str | None = None
+    # Populated only for role="assistant" when the assistant requested tools.
+    # Keeping this provider-neutral lets callers continue a multi-turn tool loop.
+    tool_calls: list["ToolCall"] | None = None
 
 
 @dataclass

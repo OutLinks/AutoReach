@@ -326,6 +326,7 @@ def create_app(
         return {
             "environment": settings.environment,
             "simulate": orchestrator.config.simulate,
+            "llm_orchestrator_enabled": orchestrator.config.llm_orchestrator_enabled,
             "reply_handling_enabled": orchestrator.config.reply_handling_enabled,
             "scheduler_enabled": config_store.get_bool("scheduler_enabled"),
             "scheduler_timezone": config_store.get("scheduler_timezone"),

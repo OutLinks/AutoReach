@@ -86,6 +86,18 @@ class AnthropicAdapter(ProviderAdapter):
                         }
                     ],
                 })
+            elif msg.role == "assistant" and msg.tool_calls:
+                blocks: list[dict[str, Any]] = []
+                if isinstance(msg.content, str) and msg.content:
+                    blocks.append({"type": "text", "text": msg.content})
+                for call in msg.tool_calls:
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": call.id,
+                        "name": call.name,
+                        "input": json.loads(call.arguments or "{}"),
+                    })
+                api_messages.append({"role": "assistant", "content": blocks})
 
             else:
                 api_messages.append({

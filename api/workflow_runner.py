@@ -13,7 +13,8 @@ from uuid import uuid4
 from core.runtime_paths import agent_output_dir
 from orchestrator import models as pipeline_models
 from orchestrator.adapters.live import _load_agent
-from orchestrator.state_machine import STAGE_BY_NAME
+from orchestrator.state_machine import STAGE_BY_NAME, available_stages
+from orchestrator.llm_orchestrator import LLMOrchestrator
 
 from .workflows import WorkflowStore
 
@@ -578,6 +579,84 @@ class WorkflowRunner:
                 sent_at=reply["occurred_at"],
             )
 
+    # LLM orchestrator tools
+
+    async def execute_orchestrator_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        job_id: str,
+    ) -> Any:
+        """Execute one bounded tool exposed to the LLM orchestrator.
+
+        This is deliberately the only bridge from model-selected actions to
+        the runtime. Every mutating operation delegates to an existing
+        workflow or Orchestrator method, so state-machine and policy checks are
+        not duplicated in the prompt layer.
+        """
+        if name == "get_pipeline_state":
+            lead_id = (args.get("lead_id") or "").strip()
+            if lead_id:
+                lead = self.orchestrator.store.get_lead(lead_id)
+                if lead is None:
+                    raise ValueError("Lead not found")
+                return {
+                    "lead": lead.model_dump(mode="json"),
+                    "available_actions": self._available_actions(lead),
+                }
+            campaign = self.orchestrator.active_campaign
+            return {
+                "funnel": self.orchestrator.store.count_by_state(),
+                "active_campaign": campaign.model_dump(mode="json") if campaign else None,
+            }
+        if name == "get_available_actions":
+            lead = self.orchestrator.store.get_lead(args["lead_id"])
+            if lead is None:
+                raise ValueError("Lead not found")
+            return {"lead_id": lead.id, "state": lead.state, "actions": self._available_actions(lead)}
+        if name == "research_company":
+            return await self._research_create(
+                {
+                    "company": args.get("company"),
+                    "lead_id": args.get("lead_id"),
+                    "prompt": args.get("prompt"),
+                },
+                job_id,
+            )
+        if name == "draft_email":
+            return await self._email_generate(
+                {
+                    "lead_id": args["lead_id"],
+                    "campaign_id": args["campaign_id"],
+                    "tone": args.get("tone"),
+                    "instructions": args.get("instructions"),
+                },
+                job_id,
+            )
+        if name == "run_pipeline_stage":
+            stage_name = args["stage"]
+            if stage_name not in STAGE_BY_NAME:
+                raise ValueError(f"Unknown pipeline stage: {stage_name}")
+            return await self.orchestrator.run_stage(STAGE_BY_NAME[stage_name])
+        if name == "run_pipeline_cycle":
+            return await self.orchestrator.run_cycle()
+        if name == "find_leads":
+            return await self.orchestrator.run_find()
+        if name == "send_approved_email":
+            return await self._email_send({"draft_id": args["draft_id"]}, job_id)
+        if name == "get_pipeline_health":
+            return self.orchestrator.health()
+        if name == "get_pipeline_report":
+            return self.orchestrator.report()
+        raise ValueError(f"Unsupported orchestrator tool: {name}")
+
+    def _available_actions(self, lead: Any) -> list[str]:
+        """Expose legal actions without exposing arbitrary state mutation."""
+        return available_stages(
+            lead.state,
+            reply_handling_enabled=self.orchestrator.config.reply_handling_enabled,
+        )
+
     # Lead finding
 
     async def _lead_search(
@@ -674,8 +753,48 @@ class WorkflowRunner:
     ) -> dict[str, Any]:
         conversation_id = payload["conversation_id"]
         message = payload["message"].lower()
-        action, agent = self._operator_action(message)
         context = payload.get("context") or {}
+
+        if self.orchestrator.config.llm_orchestrator_enabled:
+            timeline_id = self.workflows.add_timeline_step(
+                conversation_id,
+                step="llm_orchestrator",
+                agent="llm-orchestrator",
+                action="tool_router",
+                status="running",
+                started_at=datetime.now(timezone.utc).isoformat(),
+            )
+            try:
+                llm = LLMOrchestrator(self.orchestrator.config.orchestrator_model)
+                result = await llm.run(
+                    payload["message"],
+                    context,
+                    lambda name, args: self.execute_orchestrator_tool(name, args, job_id),
+                )
+                self.workflows.update_timeline_step(timeline_id, "succeeded")
+                serialized = self._jsonable(result.result)
+                tool_message = result.response or f"Completed {result.action}."
+                self.workflows.add_operator_message(
+                    conversation_id,
+                    "tool",
+                    json.dumps({"action": result.action, "result": serialized}, default=str),
+                    tool_calls=result.tool_calls or None,
+                )
+                self.workflows.add_operator_message(conversation_id, "agent", tool_message)
+                return {
+                    "conversation_id": conversation_id,
+                    "action": result.action,
+                    "result": serialized,
+                    "response": tool_message,
+                    "tool_calls": result.tool_calls,
+                }
+            except Exception:
+                self.workflows.update_timeline_step(timeline_id, "failed")
+                raise
+
+        # Deterministic fallback remains available for simulation and for
+        # installations that have not configured an orchestrator model.
+        action, agent = self._operator_action(message)
         if action == "pipeline.stage:research" and context.get("lead_id"):
             action = "research.create"
         elif (

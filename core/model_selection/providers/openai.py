@@ -89,6 +89,22 @@ class ChatCompletionsAdapter(ProviderAdapter):
                         else json.dumps(msg.content)
                     ),
                 })
+            elif msg.role == "assistant" and msg.tool_calls:
+                api_messages.append({
+                    "role": "assistant",
+                    "content": msg.content if isinstance(msg.content, str) else None,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": call.arguments,
+                            },
+                        }
+                        for call in msg.tool_calls
+                    ],
+                })
             else:
                 api_messages.append({
                     "role": msg.role,
