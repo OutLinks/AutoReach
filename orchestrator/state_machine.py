@@ -79,5 +79,23 @@ def can_transition(from_state: str, to_state: str) -> bool:
     return to_state in TRANSITIONS.get(from_state, set())
 
 
+def available_stages(state: str, *, reply_handling_enabled: bool = True) -> list[str]:
+    """Return stage actions currently legal for a lead state.
+
+    This is a read-only view for operator tooling and the LLM orchestrator;
+    actual execution still flows through ``Orchestrator.run_stage``.
+    """
+    names: list[str] = []
+    for stage in QUEUE_STAGES:
+        source_states = {stage.from_state} if stage.from_state else set()
+        if stage.name == FOLLOWUP.name:
+            source_states = {M.SENT, M.FOLLOWING_UP}
+        if state in source_states:
+            if stage.name == REPLY.name and not reply_handling_enabled:
+                continue
+            names.append(stage.name)
+    return names
+
+
 def is_terminal(state: str) -> bool:
     return state in M.TERMINAL_STATES

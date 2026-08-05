@@ -124,6 +124,13 @@ class OrchestratorConfig:
         max_tokens=4096,
         temperature=0.1,
     ))
+    # Natural-language operator requests use the LLM as a bounded tool router;
+    # the state machine remains the authority for lifecycle execution.
+    orchestrator_model: ModelConfig = field(default_factory=lambda: model_config_from_env(
+        max_tokens=4096,
+        temperature=0.1,
+    ))
+    llm_orchestrator_enabled: bool = False
 
     # When True, the engine uses simulated adapters (no real agents / APIs run).
     simulate: bool = True
@@ -150,6 +157,9 @@ class OrchestratorConfig:
     def from_env(cls) -> "OrchestratorConfig":
         config = cls()
         config.simulate = _env_bool("AUTOREACH_SIMULATE", True)
+        config.llm_orchestrator_enabled = _env_bool(
+            "AUTOREACH_LLM_ORCHESTRATOR_ENABLED", not config.simulate
+        )
         config.reply_handling_enabled = _env_bool("AUTOREACH_REPLY_HANDLING_ENABLED", False)
         config.followup_after_days = _env_int(
             "AUTOREACH_FOLLOWUP_AFTER_DAYS", config.followup_after_days

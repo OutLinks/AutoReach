@@ -134,6 +134,15 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         "AUTOREACH_LLM_MODEL",
     ),
     SettingSpec(
+        "llm_orchestrator_enabled",
+        "LLM orchestrator",
+        "AI",
+        "boolean",
+        "false",
+        "AUTOREACH_LLM_ORCHESTRATOR_ENABLED",
+        "Use the LLM to route operator requests through safe orchestration tools.",
+    ),
+    SettingSpec(
         "anthropic_api_key",
         "Anthropic API key",
         "AI",

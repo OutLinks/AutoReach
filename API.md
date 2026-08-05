@@ -116,6 +116,13 @@ All execution endpoints return HTTP `202` with a durable job record.
 | `GET` | `/v1/jobs` | List durable jobs |
 | `GET` | `/v1/jobs/{job_id}` | Poll one durable job |
 
+`POST /v1/orchestrator/messages` accepts natural-language operator requests.
+When `llm_orchestrator_enabled` is true, the LLM selects from bounded tools
+such as standalone research, email drafting, pipeline stages, and health/report
+queries. The deterministic state machine and existing workflow policy remain
+the authority for every tool execution. Simulation mode keeps the deterministic
+keyword fallback unless the LLM orchestrator is explicitly enabled.
+
 ## Campaigns, leads, and events
 
 | Method | Path | Purpose |
