@@ -84,8 +84,10 @@ class LiveAdapter(AgentAdapter):
             else ctx.config.targeting.search_prompt
         )
         await agent.run(search_request)
-        # Ingest whatever new leads landed in Agent 1's output.
-        added = await self._ingest_new_leads(ctx.store, ctx.now, ctx.campaign)
+        # Prefer records directly returned by Agent 1. This is required for the
+        # Cloudflare D1 path, where JSONL output is not durable state.
+        records = [lead.model_dump(mode="json") for lead in getattr(agent, "final_leads", [])]
+        added = await self._ingest_new_leads(ctx.store, ctx.now, ctx.campaign, records)
         return StageResult(
             stage=self.stage.name, agent=self.stage.agent,
             processed=added, succeeded=added, new_lead_ids=[],
@@ -96,34 +98,41 @@ class LiveAdapter(AgentAdapter):
         store: OrchestratorStore,
         now: datetime,
         campaign: CampaignBrief | None = None,
+        records: list[dict] | None = None,
     ) -> int:
-        out = agent_output_dir("agent1-lead-finder")
         known = {lead.id for lead in store.all_leads()}
         added = 0
-        for path in sorted(out.glob("leads_*.jsonl")):
-            for lead in _stream_jsonl(path):
-                lid = lead.get("id")
-                if not lid or lid in known:
-                    continue
-                store.save_artifact(
-                    artifact_id=f"lead-discovery:{lid}",
-                    kind="lead_discovery",
-                    lead_id=lid,
-                    source_job=campaign.id if campaign else "",
-                    payload=lead,
-                )
-                store.upsert_lead(PipelineLead(
-                    id=lid, state=DISCOVERED,
-                    email=lead.get("email") or "",
-                    company=lead.get("company_name") or "",
-                    industry=lead.get("industry") or "",
-                    quality_score=(lead.get("lead_score") or 0.0) / 100.0,
-                    discovered_at=now,
-                    source_job=campaign.id if campaign else "",
-                    metadata={"campaign_id": campaign.id} if campaign else {},
-                ))
-                known.add(lid)
-                added += 1
+        sources = records
+        if sources is None:
+            out = agent_output_dir("agent1-lead-finder")
+            sources = [
+                lead
+                for path in sorted(out.glob("leads_*.jsonl"))
+                for lead in _stream_jsonl(path)
+            ]
+        for lead in sources:
+            lid = lead.get("id")
+            if not lid or lid in known:
+                continue
+            store.save_artifact(
+                artifact_id=f"lead-discovery:{lid}",
+                kind="lead_discovery",
+                lead_id=lid,
+                source_job=campaign.id if campaign else "",
+                payload=lead,
+            )
+            store.upsert_lead(PipelineLead(
+                id=lid, state=DISCOVERED,
+                email=lead.get("email") or "",
+                company=lead.get("company_name") or "",
+                industry=lead.get("industry") or "",
+                quality_score=(lead.get("lead_score") or 0.0) / 100.0,
+                discovered_at=now,
+                source_job=campaign.id if campaign else "",
+                metadata={"campaign_id": campaign.id} if campaign else {},
+            ))
+            known.add(lid)
+            added += 1
         logger.info("LiveAdapter[find]: ingested %d new leads", added)
         return added
 
@@ -136,9 +145,12 @@ class LiveAdapter(AgentAdapter):
             config.campaign_instruction = ctx.campaign.instruction_for("research_analyst")
         agent = mod.ResearchAgent(config)
         await agent.run(lead_ids=ctx.lead_ids)
-        # Reconcile from research JSONL: status complete/partial → ok.
+        # Prefer direct agent records; R2 is the durable artifact source in a
+        # Container, with JSONL retained only for local compatibility.
+        profiles = getattr(agent, "final_profiles", [])
         out = agent_output_dir("agent2-research-analyst")
-        statuses = _index_jsonl(out.glob("research_*.jsonl"), key="lead_id")
+        statuses = ({item.get("lead_id"): item for item in profiles if item.get("lead_id")}
+                    if profiles else _index_jsonl(out.glob("research_*.jsonl"), key="lead_id"))
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
             profile = statuses.get(lid)

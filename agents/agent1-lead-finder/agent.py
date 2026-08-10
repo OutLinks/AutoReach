@@ -31,7 +31,7 @@ from .engines.search.engine import SearchEngine
 from .engines.verify.engine import VerifyEngine
 from .models import SearchCriteria, SearchJob
 from .prompt import build_system_prompt
-from .storage import DBWriter, RedisStore
+from .storage import DBWriter, D1LeadPipelineStore, RedisStore
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,11 @@ class LeadFinderAgent:
 
     def __init__(self, config: ServiceConfig | None = None) -> None:
         self._config = config or ServiceConfig()
-        self._store = RedisStore(self._config.redis_url, self._config.redis_ttl)
+        self._store = (
+            D1LeadPipelineStore(self._config.redis_ttl)
+            if self._config.lead_pipeline_backend == "d1"
+            else RedisStore(self._config.redis_url, self._config.redis_ttl)
+        )
 
         # Scrape-first discovery plus optional API enrichment/verification.
         self._search = SearchEngine(self._config, self._store)
@@ -60,8 +64,9 @@ class LeadFinderAgent:
         self._enrich = EnrichEngine(self._config, self._store)
         self._score_dedupe = ScoreDedupeEngine(self._config, self._store)
 
-        self._db_writer = DBWriter()
+        self._db_writer = DBWriter(write_files=self._config.lead_pipeline_backend != "d1")
         self._adapter = get_model(self._config.model)
+        self.final_leads = []
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -132,6 +137,7 @@ class LeadFinderAgent:
             logger.info("[%s] Phase 7: writing to DB", job_id[:8])
             written = await self._db_writer.write(scored_leads, job_id)
             job.total_written = written
+            self.final_leads = [lead for lead in scored_leads if not lead.is_duplicate]
 
             job.status = "complete"
             job.completed_at = datetime.utcnow()

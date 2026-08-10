@@ -109,6 +109,8 @@ class SentEmail(BaseModel):
     account_email: str = ""
     provider: str = "smtp"
     message_id: str = ""
+    # Stable across Queue/Workflow delivery attempts for the same email step.
+    idempotency_key: str = ""
 
     subject: str = ""
     body: str = ""

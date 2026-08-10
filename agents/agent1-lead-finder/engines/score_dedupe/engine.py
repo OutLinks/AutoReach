@@ -15,7 +15,7 @@ import logging
 
 from ...config import ServiceConfig
 from ...models import Lead
-from ...storage import RedisStore
+from ...storage.base import LeadPipelineStore
 from ..base import BaseEngine
 from .deduplicator import Deduplicator
 from .scorer import LeadScorer
@@ -31,7 +31,7 @@ class ScoreDedupeEngine(BaseEngine):
     score()  → scores each lead 0–100 and sorts descending
     """
 
-    def __init__(self, config: ServiceConfig, store: RedisStore) -> None:
+    def __init__(self, config: ServiceConfig, store: LeadPipelineStore) -> None:
         super().__init__(concurrency=config.concurrency)
         self._store = store
         self._deduplicator = Deduplicator(store)

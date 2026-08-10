@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from orchestrator.adapters.live import _load_agent
@@ -28,7 +30,12 @@ SendingLayer = importlib.import_module(
 SendGridProvider = importlib.import_module(
     "agent4_sender.layers.sending.sendgrid"
 ).SendGridProvider
+SmtpProvider = importlib.import_module(
+    "agent4_sender.layers.sending.smtp"
+).SmtpProvider
 SendingAccount = importlib.import_module("agent4_sender.models").SendingAccount
+SentEmail = importlib.import_module("agent4_sender.models").SentEmail
+SendStore = importlib.import_module("agent4_sender.storage.send_store").SendStore
 
 
 class FakeResponse:
@@ -57,6 +64,33 @@ class FakeClient:
     async def post(self, url: str, **kwargs):
         self.calls.append((url, kwargs))
         return self.response
+
+
+class FakeSmtp:
+    def __init__(self, supports_starttls: bool = True) -> None:
+        self.supports_starttls = supports_starttls
+        self.calls: list[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+    def ehlo(self) -> None:
+        self.calls.append("ehlo")
+
+    def has_extn(self, name: str) -> bool:
+        return name == "STARTTLS" and self.supports_starttls
+
+    def starttls(self) -> None:
+        self.calls.append("starttls")
+
+    def login(self, username: str, password: str) -> None:
+        self.calls.append("login")
+
+    def send_message(self, mime) -> None:
+        self.calls.append("send_message")
 
 
 def message(body: str = "<p>Hello</p>") -> OutgoingMessage:
@@ -91,6 +125,42 @@ class ProviderRegistryTests(unittest.TestCase):
         for provider in expected:
             account = SendingAccount(email="sender@example.org", provider=provider)
             self.assertEqual(layer._provider_for(account).name, provider)
+
+
+class SmtpTransportTests(unittest.TestCase):
+    def test_submission_port_requires_and_uses_starttls(self) -> None:
+        transport = FakeSmtp()
+        with patch("smtplib.SMTP", return_value=transport):
+            SmtpProvider._deliver("smtp.example.org", 587, "user", "secret", object())
+        self.assertEqual(transport.calls, ["ehlo", "starttls", "ehlo", "login", "send_message"])
+
+    def test_implicit_tls_port_uses_smtp_ssl(self) -> None:
+        transport = FakeSmtp()
+        with patch("smtplib.SMTP_SSL", return_value=transport) as ssl, patch("smtplib.SMTP") as plain:
+            SmtpProvider._deliver("smtp.example.org", 465, "", "", object())
+        ssl.assert_called_once_with("smtp.example.org", 465, timeout=30)
+        plain.assert_not_called()
+        self.assertEqual(transport.calls, ["ehlo", "send_message"])
+
+    def test_submission_port_rejects_plaintext_fallback(self) -> None:
+        transport = FakeSmtp(supports_starttls=False)
+        with patch("smtplib.SMTP", return_value=transport):
+            with self.assertRaisesRegex(RuntimeError, "STARTTLS"):
+                SmtpProvider._deliver("smtp.example.org", 587, "user", "secret", object())
+
+
+class SenderStoreTests(unittest.TestCase):
+    def test_idempotency_key_is_unique_and_queryable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SendStore(str(Path(directory) / "sends.db"))
+            sent = SentEmail(email_id="email-1", lead_id="lead-1", idempotency_key="email-1:day0")
+            store.insert_sent(sent)
+            found = store.get_sent_by_idempotency_key("email-1:day0")
+            self.assertEqual(found["id"], sent.id)
+            duplicate = SentEmail(email_id="email-2", lead_id="lead-2", idempotency_key="email-1:day0")
+            with self.assertRaises(Exception):
+                store.insert_sent(duplicate)
+            store.close()
 
 
 class ApiProviderTests(unittest.IsolatedAsyncioTestCase):

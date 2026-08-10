@@ -1,0 +1,78 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "autoreach",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "AUTOREACH_ENV": "production"
+  },
+  "containers": [
+    {
+      "class_name": "AutoReachContainer",
+      "image": "./Dockerfile",
+      "max_instances": 1,
+      "instance_type": "basic"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AUTOREACH_CONTAINER",
+        "class_name": "AutoReachContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AutoReachContainer"]
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "AUTOREACH_DB",
+      "database_name": "autoreach",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "AUTOREACH_ARTIFACTS",
+      "bucket_name": "autoreach-artifacts"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "AUTOREACH_JOBS",
+        "queue": "autoreach-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "autoreach-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_concurrency": 1,
+        "max_retries": 8,
+        "retry_delay": 30,
+        "dead_letter_queue": "autoreach-jobs-dlq"
+      }
+    ]
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "workflows": [
+    {
+      "binding": "AUTOREACH_FOLLOWUPS",
+      "name": "autoreach-followups",
+      "class_name": "FollowupWorkflow"
+    }
+  ]
+}

@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import json
 import logging
+import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 from core.runtime_paths import agent_output_dir
 
@@ -31,15 +34,22 @@ class DBWriter:
     Current implementation: JSONL file per job run.
     """
 
-    def __init__(self, output_dir: Path | None = None) -> None:
+    def __init__(self, output_dir: Path | None = None, *, write_files: bool = True) -> None:
         self._output_dir = output_dir or _DEFAULT_OUTPUT_DIR
-        self._output_dir.mkdir(parents=True, exist_ok=True)
+        self._write_files = write_files
+        if write_files:
+            self._output_dir.mkdir(parents=True, exist_ok=True)
 
     async def write(self, leads: list[Lead], job_id: str) -> int:
         """
         Write all scored leads and return the count successfully written.
         Skips any lead marked as duplicate or with a 'D' grade.
         """
+        if not self._write_files:
+            records = [lead.model_dump(mode="json") for lead in leads if not lead.is_duplicate]
+            await asyncio.to_thread(self._persist_d1, records, job_id)
+            return len(records)
+
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         output_path = self._output_dir / f"leads_{job_id[:8]}_{timestamp}.jsonl"
 
@@ -64,6 +74,17 @@ class DBWriter:
         """Write a single lead. Replace this to target a real database."""
         record = lead.model_dump(mode="json")
         fh.write(json.dumps(record, default=str) + "\n")  # type: ignore[arg-type]
+
+    @staticmethod
+    def _persist_d1(records: list[dict], job_id: str) -> None:
+        bridge_url = os.getenv("AUTOREACH_D1_BRIDGE_URL", "http://autoreach.storage").rstrip("/")
+        request = Request(
+            f"{bridge_url}/v1/lead-pipeline/persist-final-leads",
+            data=json.dumps({"job_id": job_id, "leads": records}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urlopen(request, timeout=30):  # nosec B310 Worker virtual host
+            pass
 
 
 # ── Placeholder stubs for future database integrations ───────────────────────

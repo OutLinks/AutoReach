@@ -13,7 +13,7 @@ import httpx
 
 from ...config import ServiceConfig
 from ...models import Lead
-from ...storage import RedisStore
+from ...storage.base import LeadPipelineStore
 from ..base import BaseEngine
 from .abstract import AbstractEmailValidationAdapter
 
@@ -28,7 +28,7 @@ class VerifyEngine(BaseEngine):
     the score engine penalises them heavily so they sort to the bottom.
     """
 
-    def __init__(self, config: ServiceConfig, store: RedisStore) -> None:
+    def __init__(self, config: ServiceConfig, store: LeadPipelineStore) -> None:
         super().__init__(concurrency=config.concurrency)
         self._config = config
         self._store = store

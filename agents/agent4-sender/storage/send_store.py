@@ -45,6 +45,7 @@ _SCHEMA = [
         account_email TEXT,
         provider      TEXT,
         message_id    TEXT,
+        idempotency_key TEXT UNIQUE,
         subject       TEXT,
         body          TEXT,
         status        TEXT DEFAULT 'queued',
@@ -150,6 +151,14 @@ class SendStore:
         with self._conn:
             for stmt in _SCHEMA:
                 self._conn.execute(stmt)
+            columns = {
+                row["name"] for row in self._conn.execute("PRAGMA table_info(sent_emails)")
+            }
+            if "idempotency_key" not in columns:
+                self._conn.execute("ALTER TABLE sent_emails ADD COLUMN idempotency_key TEXT")
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_sent_idempotency ON sent_emails (idempotency_key)"
+            )
             for idx in _INDEXES:
                 self._conn.execute(idx)
         logger.info("SendStore: opened at %s", db_path)
@@ -160,15 +169,25 @@ class SendStore:
         with self._conn:
             self._conn.execute(
                 """
-                INSERT OR REPLACE INTO sent_emails (
+                INSERT INTO sent_emails (
                     id, email_id, lead_id, step, recipient, account_email,
-                    provider, message_id, subject, body, status,
+                    provider, message_id, idempotency_key, subject, body, status,
                     opened, clicked, replied, bounced, sent_at, job_id, created_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    message_id = excluded.message_id,
+                    subject = excluded.subject,
+                    body = excluded.body,
+                    status = excluded.status,
+                    opened = excluded.opened,
+                    clicked = excluded.clicked,
+                    replied = excluded.replied,
+                    bounced = excluded.bounced,
+                    sent_at = excluded.sent_at
                 """,
                 (
                     s.id, s.email_id, s.lead_id, s.step, s.recipient, s.account_email,
-                    s.provider, s.message_id, s.subject, s.body, s.status,
+                    s.provider, s.message_id, s.idempotency_key, s.subject, s.body, s.status,
                     int(s.opened), int(s.clicked), int(s.replied), int(s.bounced),
                     _iso(s.sent_at), s.job_id, _iso(s.created_at),
                 ),
@@ -195,6 +214,12 @@ class SendStore:
     def get_sent_by_message_id(self, message_id: str) -> Optional[dict]:
         row = self._conn.execute(
             "SELECT * FROM sent_emails WHERE message_id = ?", (message_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_sent_by_idempotency_key(self, idempotency_key: str) -> Optional[dict]:
+        row = self._conn.execute(
+            "SELECT * FROM sent_emails WHERE idempotency_key = ?", (idempotency_key,)
         ).fetchone()
         return dict(row) if row else None
 

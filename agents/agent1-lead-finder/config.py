@@ -122,6 +122,13 @@ class ServiceConfig:
         default_factory=lambda: os.environ.get("REDIS_URL", "redis://localhost:6379")
     )
     redis_ttl: int = 86400          # 24 h — how long job data stays in Redis
+    # Cloudflare production uses D1 through the container-only bridge; Redis is
+    # retained strictly for local/Compose compatibility during the migration.
+    lead_pipeline_backend: str = field(
+        default_factory=lambda: os.environ.get("AUTOREACH_LEAD_PIPELINE_BACKEND", "redis")
+        .strip()
+        .lower()
+    )
 
     # ── Helpers ────────────────────────────────────────────────────────────
 

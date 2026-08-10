@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS emails (
     lead_first_name      TEXT,
     lead_last_name       TEXT,
     lead_company         TEXT,
+    recipient            TEXT,
+    timezone             TEXT,
+    city                 TEXT,
+    state                TEXT,
+    country              TEXT,
     sender_name          TEXT,
     sender_email         TEXT,
     tone                 TEXT,
@@ -84,6 +89,10 @@ class EmailDatabase:
         with self._conn:
             self._conn.execute(_CREATE_EMAILS)
             self._conn.execute(_CREATE_JOBS)
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(emails)")}
+            for name in ("recipient", "timezone", "city", "state", "country"):
+                if name not in columns:
+                    self._conn.execute(f"ALTER TABLE emails ADD COLUMN {name} TEXT")
             for idx in _CREATE_INDEXES:
                 self._conn.execute(idx)
 
@@ -101,10 +110,11 @@ class EmailDatabase:
                 INSERT OR REPLACE INTO emails (
                     id, lead_id, research_profile_id, subject, body, hook, cta,
                     lead_first_name, lead_last_name, lead_company,
+                    recipient, timezone, city, state, country,
                     sender_name, sender_email, tone, template_name,
                     quality_score, quality_passed, quality_report,
                     status, job_id, created_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     email.id,
@@ -117,6 +127,11 @@ class EmailDatabase:
                     email.lead_first_name,
                     email.lead_last_name,
                     email.lead_company,
+                    email.recipient,
+                    email.timezone,
+                    email.city,
+                    email.state,
+                    email.country,
                     email.sender_name,
                     email.sender_email,
                     email.tone,

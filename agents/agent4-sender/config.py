@@ -35,6 +35,14 @@ class ServiceConfig:
             or (agent_output_dir("agent4-sender") / "sends.db")
         )
     )
+    # Local SQLite is retained for development. The Cloudflare container uses
+    # the Worker outbound bridge so sender state survives container restarts.
+    storage_backend: str = field(
+        default_factory=lambda: os.getenv("AUTOREACH_SENDER_STORAGE_BACKEND", "sqlite").lower()
+    )
+    email_reader_backend: str = field(
+        default_factory=lambda: os.getenv("AUTOREACH_EMAIL_WRITER_STORAGE_BACKEND", "sqlite").lower()
+    )
 
     # Where Agent 3 wrote its emails (the source of what we send)
     emails_db_path: str = field(
@@ -112,6 +120,14 @@ class ServiceConfig:
         cfg.tracking_pixel_base_url = os.getenv(
             "AGENT4_TRACKING_BASE_URL", cfg.tracking_pixel_base_url
         )
+        cfg.storage_backend = os.getenv("AUTOREACH_SENDER_STORAGE_BACKEND", cfg.storage_backend).lower()
+        if cfg.storage_backend not in {"sqlite", "d1"}:
+            raise ValueError("AUTOREACH_SENDER_STORAGE_BACKEND must be 'sqlite' or 'd1'")
+        cfg.email_reader_backend = os.getenv(
+            "AUTOREACH_EMAIL_WRITER_STORAGE_BACKEND", cfg.email_reader_backend
+        ).lower()
+        if cfg.email_reader_backend not in {"sqlite", "d1"}:
+            raise ValueError("AUTOREACH_EMAIL_WRITER_STORAGE_BACKEND must be 'sqlite' or 'd1'")
         return cfg
 
     # ── Helpers ────────────────────────────────────────────────────────────────

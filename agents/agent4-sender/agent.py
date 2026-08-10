@@ -28,16 +28,19 @@ server / provider webhooks call:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 from .accounts import load_accounts
 from .config import ServiceConfig
 from .models import STEP_DAY0, SendJob, SentEmail
 from .storage.email_reader import EmailReader
 from .storage.send_store import SendStore
+from .storage.d1_send_store import D1SendStore
 from .layers.scheduling.scheduler import SchedulingLayer
 from .layers.sending.sender import SendingLayer
 from .layers.tracking.tracker import TrackingLayer
@@ -52,8 +55,8 @@ class SenderAgent:
     def __init__(self, config: ServiceConfig) -> None:
         self._config = config
 
-        self._reader = EmailReader(config.emails_db_path)
-        self._store = SendStore(config.db_path)
+        self._reader = EmailReader(config.emails_db_path, backend=config.email_reader_backend)
+        self._store = D1SendStore() if config.storage_backend == "d1" else SendStore(config.db_path)
 
         accounts = load_accounts(config)
         self._scheduling = SchedulingLayer(config, accounts)
@@ -304,8 +307,22 @@ class SenderAgent:
             logger.error("SenderAgent: account %s not found", account_email)
             return None
 
+        # Reserve the delivery before contacting a provider. Queue and
+        # Workflow retries use the same key; an ambiguous previous attempt is
+        # never resent automatically, preventing duplicate outreach.
+        idempotency_key = hashlib.sha256(
+            f"{email_id}\x1f{lead_id}\x1f{step}".encode("utf-8")
+        ).hexdigest()
+        existing = self._store.get_sent_by_idempotency_key(idempotency_key)
+        if existing:
+            if existing.get("status") in {"sent", "delivered", "opened", "clicked", "replied"}:
+                return SentEmail.model_validate(existing)
+            logger.warning("SenderAgent: delivery %s is awaiting reconciliation", idempotency_key)
+            return None
+
         # Build the record first so tracking can key off its id.
         sent = SentEmail(
+            id=str(uuid5(NAMESPACE_URL, f"autoreach:{idempotency_key}")),
             email_id=email_id,
             lead_id=lead_id,
             step=step,
@@ -316,7 +333,11 @@ class SenderAgent:
             body=body,
             status="queued",
             job_id=job_id,
+            idempotency_key=idempotency_key,
         )
+
+        sent.status = "sending"
+        self._store.insert_sent(sent)
 
         instrumented_body = self._tracking.instrument(body, sent.id)
         result = await self._sending.deliver(

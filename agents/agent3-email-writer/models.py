@@ -147,6 +147,13 @@ class WrittenEmail(BaseModel):
     lead_first_name: str = ""
     lead_last_name: str = ""
     lead_company: str = ""
+    # Delivery snapshot. Agent 4 must not re-read Agent 1's transient JSONL
+    # output to discover where or when this approved message is sent.
+    recipient: str = ""
+    timezone: str = ""
+    city: str = ""
+    state: str = ""
+    country: str = ""
     sender_name: str = ""
     sender_email: str = ""
     tone: str = ""

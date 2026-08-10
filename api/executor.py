@@ -13,7 +13,7 @@ from orchestrator import Orchestrator
 from orchestrator.adapters.live import _load_agent
 from orchestrator.state_machine import STAGE_BY_NAME
 
-from .jobs import JobRecord, JobStore
+from .jobs import JobRecord, JobRepository
 from .workflow_runner import WorkflowRunner
 from .workflows import WorkflowStore
 
@@ -35,7 +35,7 @@ class JobExecutor:
 
     def __init__(
         self,
-        store: JobStore,
+        store: JobRepository,
         orchestrator: Orchestrator,
         workflows: WorkflowStore,
     ) -> None:
@@ -82,19 +82,34 @@ class JobExecutor:
         while True:
             job_id = await self._queue.get()
             try:
-                job = self.store.get(job_id)
-                if job.status != "queued":
-                    continue
-                self.store.mark_running(job_id)
-                result = await self._execute(job)
-                self.store.mark_succeeded(job_id, _jsonable(result))
+                await self.execute_job(job_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.exception("API job %s failed", job_id)
-                self.store.mark_failed(job_id, f"{type(exc).__name__}: {exc}")
             finally:
                 self._queue.task_done()
+
+    async def execute_job(self, job_id: str) -> JobRecord:
+        """Execute one queued job and persist its terminal result.
+
+        This is the production-facing execution seam: a Queue consumer can
+        invoke it through the authenticated internal HTTP endpoint instead of
+        relying on this process's in-memory queue. The current SQLite store is
+        retained for local development only; its D1 replacement will add durable
+        lease expiry and retry scheduling with this same method contract.
+        """
+        job = self.store.claim_for_execution(job_id)
+        if job is None:
+            return self.store.get(job_id)
+        try:
+            result = await self._execute(job)
+        except Exception as exc:
+            logger.exception("API job %s failed", job_id)
+            self.store.mark_failed(job_id, f"{type(exc).__name__}: {exc}")
+            return self.store.get(job_id)
+        self.store.mark_succeeded(job_id, _jsonable(result))
+        return self.store.get(job_id)
 
     async def _execute(self, job: JobRecord) -> Any:
         payload = job.payload

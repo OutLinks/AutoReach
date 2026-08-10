@@ -14,7 +14,7 @@ import logging
 
 from ...config import ServiceConfig
 from ...models import Lead
-from ...storage import RedisStore
+from ...storage.base import LeadPipelineStore
 from ..base import BaseEngine
 from .crunchbase import CrunchbaseAdapter
 from .domain_intel import SecurityTrailsAdapter, WhoisXmlAdapter
@@ -33,7 +33,7 @@ class EnrichEngine(BaseEngine):
     overwritten, so search-stage data takes priority.
     """
 
-    def __init__(self, config: ServiceConfig, store: RedisStore) -> None:
+    def __init__(self, config: ServiceConfig, store: LeadPipelineStore) -> None:
         super().__init__(concurrency=config.concurrency)
         self._config = config
         self._store = store

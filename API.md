@@ -1,10 +1,12 @@
 # AutoReach API
 
-AutoReach is an API-only FastAPI service. It does not bundle a frontend and
-authentication is intentionally disabled at this stage.
+AutoReach is an API-only FastAPI service. It does not bundle a frontend.
 
-> Do not expose this version to an untrusted network. Every endpoint, including
-> configuration writes and live sending controls, is currently unauthenticated.
+> Local development has no application authentication. In the Cloudflare
+> Container deployment, the Worker requires `Authorization: Bearer
+> $AUTOREACH_API_TOKEN` for every public endpoint except `/healthz`; it strips
+> internal execution headers before proxying. Do not expose the local server to
+> an untrusted network.
 
 ## Service endpoints
 
@@ -41,8 +43,12 @@ curl -sS -X POST http://127.0.0.1:8000/v1/setup \
   }'
 ```
 
-Settings and credentials are written through `PATCH /v1/settings`; they do not
-need to be placed in a frontend environment file.
+In local development, settings and credentials are written through
+`PATCH /v1/settings`; they do not need to be placed in a frontend environment
+file. In Cloudflare Container mode, secret settings are rejected by that route:
+configure them as Worker Secrets instead. The signed
+`POST /internal/jobs/{job_id}/execute` endpoint is Worker-only and must never
+be exposed through a public route.
 
 Live email writing requires `sender_first_name`, `sender_last_name`, and
 `sender_email`. Optional sender identity settings include `sender_title`,

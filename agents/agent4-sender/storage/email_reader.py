@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from typing import Generator, Optional
+from urllib.request import Request, urlopen
 
 from core.runtime_paths import agent_output_dir
 
@@ -29,9 +31,15 @@ class EmailReader:
         self,
         emails_db_path: str,
         leads_dir: Optional[Path] = None,
+        backend: str = "sqlite",
+        bridge_url: Optional[str] = None,
     ) -> None:
         self._path = emails_db_path
         self._leads_dir = leads_dir or _AGENT1_OUTPUT_DIR
+        self._backend = backend
+        self._bridge_url = (bridge_url or os.getenv(
+            "AUTOREACH_D1_BRIDGE_URL", "http://autoreach.storage"
+        )).rstrip("/")
         self._lead_index: dict[str, dict] = {}
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -49,6 +57,8 @@ class EmailReader:
             lead_ids: restrict to these lead IDs (all if None).
         """
         statuses = statuses or ["approved"]
+        if self._backend == "d1":
+            return self._read_d1(statuses, lead_ids)
         if not Path(self._path).exists():
             logger.warning("EmailReader: Agent 3 DB not found at %s", self._path)
             return []
@@ -77,6 +87,8 @@ class EmailReader:
         return emails
 
     def read_by_id(self, email_id: str) -> Optional[dict]:
+        if self._backend == "d1":
+            return self._d1_call("get-email", {"id": email_id}).get("email")
         if not Path(self._path).exists():
             return None
         try:
@@ -90,6 +102,30 @@ class EmailReader:
             logger.error("EmailReader: lookup failed — %s", exc)
             return None
         return self._enrich(dict(row)) if row else None
+
+    def _read_d1(self, statuses: list[str], lead_ids: Optional[list[str]]) -> list[dict]:
+        """Read delivery-ready rows from Agent 3's canonical D1 store.
+
+        These records already include the recipient/location snapshot; unlike
+        the SQLite development fallback, no Agent 1 filesystem join occurs.
+        """
+        value = self._d1_call("list-sendable", {"statuses": statuses, "lead_ids": lead_ids})
+        emails = list(value.get("items", []))
+        logger.info("EmailReader: loaded %d D1 sendable emails", len(emails))
+        return emails
+
+    def _d1_call(self, operation: str, payload: dict) -> dict:
+        request = Request(
+            f"{self._bridge_url}/v1/email-writer/{operation}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=15) as response:  # nosec B310 Worker virtual host
+            value = json.loads(response.read().decode())
+        if not isinstance(value, dict):
+            raise RuntimeError("D1 email-writer bridge returned an invalid response")
+        return value
 
     # ── Lead enrichment (join back to Agent 1) ─────────────────────────────────
 

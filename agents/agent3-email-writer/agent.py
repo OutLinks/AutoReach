@@ -35,6 +35,7 @@ from .layers.input.sender_profile import SenderProfileLoader
 from .layers.writing.writer import WritingLayer
 from .layers.quality.checker import QualityLayer
 from .layers.output.email_db import EmailDatabase
+from .layers.output.d1_email_db import D1EmailDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +48,11 @@ class EmailWriterAgent:
         brand_voice = BrandVoiceLoader().load()
         sender = SenderProfileLoader().load()
 
-        self._reader = ResearchReader()
+        self._reader = ResearchReader(backend=config.research_reader_backend)
         self._assembler = InputAssembler(brand_voice, sender)
         self._writing = WritingLayer(config)
         self._quality = QualityLayer(config)
-        self._db = EmailDatabase(config.db_path)
+        self._db = D1EmailDatabase() if config.storage_backend == "d1" else EmailDatabase(config.db_path)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -159,6 +160,11 @@ class EmailWriterAgent:
                 lead_first_name=ctx.lead_first_name,
                 lead_last_name=ctx.lead_last_name,
                 lead_company=ctx.lead_company,
+                recipient=lead.get("email") or "",
+                timezone=lead.get("timezone") or "",
+                city=lead.get("city") or "",
+                state=lead.get("state") or "",
+                country=lead.get("country") or "",
                 sender_name=ctx.sender.full_name,
                 sender_email=ctx.sender.email,
                 tone=ctx.recommended_tone or ctx.brand_voice.tone,

@@ -45,6 +45,7 @@ class ResearchAgent:
         self._config = config
         self._collector = DataCollector(config)
         self._analysis = AnalysisLayer(config)
+        self.final_profiles: list[dict] = []
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -95,6 +96,7 @@ class ResearchAgent:
         # 4. Finalize
         job.status = "complete"
         job.completed_at = datetime.utcnow()
+        self.final_profiles = store.records
         logger.info(
             "ResearchAgent: done — %d complete, %d partial, %d failed (wrote to %s)",
             job.completed,

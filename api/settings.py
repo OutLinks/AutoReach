@@ -28,6 +28,10 @@ class AppSettings:
     scheduler_interval_seconds: int = 30
     scheduler_timezone: str = "UTC"
     cors_origins: tuple[str, ...] = ()
+    # The Worker/Queue owns execution in Cloudflare. Local development retains
+    # the previous in-process executor behind this explicit mode.
+    executor_mode: str = "local"
+    storage_backend: str = "sqlite"
 
     @property
     def job_db_path(self) -> Path:
@@ -42,6 +46,10 @@ class AppSettings:
             raise ValueError(
                 f"AUTOREACH_SCHEDULER_TIMEZONE is invalid: {self.scheduler_timezone}"
             ) from exc
+        if self.executor_mode not in {"local", "external"}:
+            raise ValueError("AUTOREACH_EXECUTOR_MODE must be 'local' or 'external'")
+        if self.storage_backend not in {"sqlite", "d1"}:
+            raise ValueError("AUTOREACH_STORAGE_BACKEND must be 'sqlite' or 'd1'")
 
     @classmethod
     def from_env(cls) -> "AppSettings":
@@ -60,6 +68,8 @@ class AppSettings:
             ),
             scheduler_timezone=os.getenv("AUTOREACH_SCHEDULER_TIMEZONE", "UTC"),
             cors_origins=origins,
+            executor_mode=os.getenv("AUTOREACH_EXECUTOR_MODE", "local").strip().lower(),
+            storage_backend=os.getenv("AUTOREACH_STORAGE_BACKEND", "sqlite").strip().lower(),
         )
         settings.validate()
         return settings

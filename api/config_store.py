@@ -587,6 +587,15 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
 
 _SPEC_BY_KEY = {spec.key: spec for spec in SETTING_SPECS}
 
+
+def secret_setting_keys(values: dict[str, Any]) -> set[str]:
+    """Return supplied settings that must be managed outside application state."""
+    return {
+        key
+        for key, value in values.items()
+        if value is not None and key in _SPEC_BY_KEY and _SPEC_BY_KEY[key].kind == "secret"
+    }
+
 _SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS app_meta (
@@ -741,10 +750,15 @@ class ConfigStore:
             )
         return {"database_path": str(self.path), "items": items}
 
-    def apply_to_process(self) -> None:
+    def apply_to_process(self, *, preserve_secret_environment: bool = False) -> None:
         """Expose DB values to legacy adapters without reading a .env file."""
         for spec in SETTING_SPECS:
             if spec.env_name:
+                if preserve_secret_environment and spec.kind == "secret":
+                    # Cloudflare Worker Secrets are injected at container start.
+                    # Never overwrite them with a persisted DB value (including
+                    # a stale plaintext secret from a pre-migration database).
+                    continue
                 os.environ[spec.env_name] = self.get(spec.key)
         os.environ["AUTOREACH_DATABASE_PATH"] = str(self.path)
         os.environ["AGENT4_SIMULATE"] = self.get("simulate")

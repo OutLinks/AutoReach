@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 from ...models import Lead
-from ...storage import RedisStore
+from ...storage.base import LeadPipelineStore
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ def _name_key(lead: Lead) -> str | None:
 class Deduplicator:
     """Filters a lead list to unique contacts using Redis as the store."""
 
-    def __init__(self, store: RedisStore) -> None:
+    def __init__(self, store: LeadPipelineStore) -> None:
         self._store = store
 
     async def dedupe(self, leads: list[Lead]) -> list[Lead]:

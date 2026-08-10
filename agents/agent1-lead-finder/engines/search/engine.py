@@ -13,7 +13,7 @@ import logging
 
 from ...config import ServiceConfig
 from ...models import Lead, SearchCriteria
-from ...storage import RedisStore
+from ...storage.base import LeadPipelineStore
 from ..base import BaseEngine
 from .tavily import TavilyAdapter
 from .web_scraper import WebScraperAdapter
@@ -30,7 +30,7 @@ class SearchEngine(BaseEngine):
     stored in Redis `job:{job_id}:leads:raw` for the next pipeline stage.
     """
 
-    def __init__(self, config: ServiceConfig, store: RedisStore) -> None:
+    def __init__(self, config: ServiceConfig, store: LeadPipelineStore) -> None:
         super().__init__(concurrency=config.concurrency)
         self._config = config
         self._store = store

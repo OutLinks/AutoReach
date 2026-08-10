@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 **/output/
 .data/
+node_modules/
+.wrangler/
+worker-configuration.d.ts

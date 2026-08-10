@@ -7,6 +7,7 @@ This is the single place to configure how AutoReach sounds and who it comes from
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from core.model_selection.types import ModelConfig, model_config_from_env
@@ -33,6 +34,12 @@ class ServiceConfig:
             or (agent_output_dir("agent3-email-writer") / "emails.db")
         )
     )
+    storage_backend: str = field(
+        default_factory=lambda: os.getenv("AUTOREACH_EMAIL_WRITER_STORAGE_BACKEND", "sqlite").lower()
+    )
+    research_reader_backend: str = field(
+        default_factory=lambda: os.getenv("AUTOREACH_RESEARCH_READER_BACKEND", "local").lower()
+    )
 
     # Concurrency
     concurrency: int = 5
@@ -55,4 +62,15 @@ class ServiceConfig:
 
     @classmethod
     def from_env(cls) -> "ServiceConfig":
-        return cls()
+        cfg = cls()
+        cfg.storage_backend = os.getenv(
+            "AUTOREACH_EMAIL_WRITER_STORAGE_BACKEND", cfg.storage_backend
+        ).lower()
+        if cfg.storage_backend not in {"sqlite", "d1"}:
+            raise ValueError("AUTOREACH_EMAIL_WRITER_STORAGE_BACKEND must be 'sqlite' or 'd1'")
+        cfg.research_reader_backend = os.getenv(
+            "AUTOREACH_RESEARCH_READER_BACKEND", cfg.research_reader_backend
+        ).lower()
+        if cfg.research_reader_backend not in {"local", "d1"}:
+            raise ValueError("AUTOREACH_RESEARCH_READER_BACKEND must be 'local' or 'd1'")
+        return cfg

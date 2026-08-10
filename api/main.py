@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -18,9 +18,10 @@ from orchestrator import Orchestrator, OrchestratorConfig
 from orchestrator.models import DISCOVERED, NEW, PipelineLead
 from orchestrator.state_machine import STAGE_BY_NAME
 
-from .config_store import ConfigStore, DatabaseLocator
+from .config_store import ConfigStore, DatabaseLocator, secret_setting_keys
 from .executor import JobExecutor
-from .jobs import JobRecord, JobStore
+from .internal_auth import validate_job_execution
+from .jobs import JobRecord, build_job_repository
 from .scheduler import HourlyScheduler
 from .settings import AppSettings
 from .workflows import WorkflowStore
@@ -184,11 +185,13 @@ def create_app(
         database_path: Path,
         config_store: ConfigStore,
     ) -> None:
-        config_store.apply_to_process()
+        config_store.apply_to_process(
+            preserve_secret_environment=settings.executor_mode == "external"
+        )
         config = OrchestratorConfig.from_env()
         config.db_path = str(database_path)
         orchestrator = orchestrator_factory(config)
-        job_store = JobStore(database_path)
+        job_store = build_job_repository(database_path, settings.storage_backend)
         workflow_store = WorkflowStore(database_path)
         executor = JobExecutor(job_store, orchestrator, workflow_store)
         scheduler = HourlyScheduler(
@@ -203,8 +206,9 @@ def create_app(
         application.state.workflow_store = workflow_store
         application.state.executor = executor
         application.state.scheduler = scheduler
-        await executor.start()
-        if config_store.get_bool("scheduler_enabled"):
+        if settings.executor_mode == "local":
+            await executor.start()
+        if settings.executor_mode == "local" and config_store.get_bool("scheduler_enabled"):
             scheduler.start()
 
     @asynccontextmanager
@@ -259,7 +263,9 @@ def create_app(
                 "report": "/v1/orchestrator/report",
                 "messages": "/v1/orchestrator/messages",
             },
-            "authentication": "disabled",
+            "authentication": (
+                "worker-required" if settings.executor_mode == "external" else "disabled"
+            ),
         }
 
     @application.get("/healthz")
@@ -281,6 +287,13 @@ def create_app(
 
     @application.post("/v1/setup", status_code=status.HTTP_201_CREATED)
     async def setup(request: SetupRequest) -> dict[str, Any]:
+        if settings.executor_mode == "external":
+            rejected = secret_setting_keys(request.settings)
+            if rejected:
+                raise HTTPException(
+                    status_code=422,
+                    detail=("Configure secrets through Cloudflare Worker Secrets: " + ", ".join(sorted(rejected))),
+                )
         async with application.state.runtime_lock:
             current_store: ConfigStore = application.state.config_store
             if current_store.configured:
@@ -309,6 +322,13 @@ def create_app(
 
     @application.patch("/v1/settings")
     async def update_settings(request: SettingsUpdateRequest) -> dict[str, Any]:
+        if settings.executor_mode == "external":
+            rejected = secret_setting_keys(request.values)
+            if rejected:
+                raise HTTPException(
+                    status_code=422,
+                    detail=("Configure secrets through Cloudflare Worker Secrets: " + ", ".join(sorted(rejected))),
+                )
         async with application.state.runtime_lock:
             config_store: ConfigStore = application.state.config_store
             try:
@@ -403,6 +423,30 @@ def create_app(
             return application.state.job_store.get(job_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+
+    @application.post("/internal/jobs/{job_id}/execute", response_model=JobRecord)
+    async def execute_internal_job(
+        job_id: str,
+        internal_timestamp: Annotated[str | None, Header(alias="X-AutoReach-Internal-Timestamp")] = None,
+        internal_signature: Annotated[str | None, Header(alias="X-AutoReach-Internal-Signature")] = None,
+        queue_attempt: Annotated[int, Header(alias="X-AutoReach-Queue-Attempt")] = 1,
+    ) -> JobRecord:
+        """Run exactly one claimed job for the authenticated Worker/Queue path."""
+        if not validate_job_execution(job_id, internal_timestamp, internal_signature):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid internal auth")
+        try:
+            # Queue delivery is at least once. On a retry, release only a prior
+            # terminal failure; a running/succeeded job remains untouched.
+            if settings.storage_backend == "d1" and queue_attempt > 1:
+                application.state.job_store.requeue_failed(job_id)
+            job = await application.state.executor.execute_job(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        if settings.storage_backend == "d1" and job.status == "failed":
+            # The Queue consumer treats this as a retryable delivery failure.
+            # After its configured limit Cloudflare moves the message to the DLQ.
+            raise HTTPException(status_code=503, detail="Job execution failed; retry queued")
+        return job
 
     @application.get("/v1/leads")
     async def list_leads(

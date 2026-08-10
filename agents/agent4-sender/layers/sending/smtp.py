@@ -47,9 +47,17 @@ class SmtpProvider(SendingProvider):
 
     @staticmethod
     def _deliver(host, port, username, password, mime: EmailMessage) -> None:
-        with smtplib.SMTP(host, port, timeout=30) as server:
+        # Port 465 is implicit TLS. Port 587 is the submission port and must
+        # negotiate STARTTLS before credentials or content are sent.
+        client = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
+        with client(host, port, timeout=30) as server:
             server.ehlo()
-            if server.has_extn("STARTTLS"):
+            if port == 587:
+                if not server.has_extn("STARTTLS"):
+                    raise RuntimeError("SMTP server does not support STARTTLS on port 587")
+                server.starttls()
+                server.ehlo()
+            elif port != 465 and server.has_extn("STARTTLS"):
                 server.starttls()
                 server.ehlo()
             if username and password:

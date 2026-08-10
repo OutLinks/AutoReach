@@ -12,6 +12,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from api.main import create_app
+from api.internal_auth import sign_job_execution
 from api.settings import AppSettings
 from orchestrator.adapters.live import _load_agent
 
@@ -67,6 +68,50 @@ class ApiTests(unittest.TestCase):
         with TestClient(create_app(self.settings)) as client:
             response = client.post("/v1/jobs/stages/not-a-stage")
             self.assertEqual(response.status_code, 404)
+
+    def test_external_executor_runs_one_signed_job_directly(self) -> None:
+        external_settings = AppSettings(
+            environment="test",
+            data_dir=Path(self.tempdir.name),
+            scheduler_enabled=False,
+            executor_mode="external",
+        )
+        with patch.dict(os.environ, {"AUTOREACH_INTERNAL_HMAC_SECRET": "test-secret"}):
+            with TestClient(create_app(external_settings)) as client:
+                created = client.post("/v1/jobs/find")
+                self.assertEqual(created.status_code, 202)
+                job_id = created.json()["id"]
+                timestamp = str(int(time.time()))
+                response = client.post(
+                    f"/internal/jobs/{job_id}/execute",
+                    headers={
+                        "X-AutoReach-Internal-Timestamp": timestamp,
+                        "X-AutoReach-Internal-Signature": sign_job_execution(
+                            "test-secret", job_id, timestamp
+                        ),
+                    },
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["status"], "succeeded")
+                self.assertGreater(client.get("/v1/leads").json()["total"], 0)
+
+                denied = client.post(f"/internal/jobs/{job_id}/execute")
+                self.assertEqual(denied.status_code, 403)
+
+    def test_external_mode_rejects_plaintext_secret_settings(self) -> None:
+        external_settings = AppSettings(
+            environment="test",
+            data_dir=Path(self.tempdir.name),
+            scheduler_enabled=False,
+            executor_mode="external",
+        )
+        with TestClient(create_app(external_settings)) as client:
+            response = client.patch(
+                "/v1/settings",
+                json={"values": {"openai_api_key": "must-not-persist"}},
+            )
+            self.assertEqual(response.status_code, 422)
+            self.assertIn("Cloudflare Worker Secrets", response.json()["detail"])
 
     def test_settings_are_database_backed_and_secrets_are_masked(self) -> None:
         with TestClient(create_app(self.settings)) as client:
