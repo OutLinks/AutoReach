@@ -28,7 +28,8 @@ class Notifier:
 
     def notify(self, notification: Notification) -> None:
         self._store.add_notification(notification)
-        self._write_file(notification)
+        if not getattr(self._store, "durable", False):
+            self._write_file(notification)
         self._dispatch_external(notification)
         logger.info(
             "Notifier: [%s] %s — %s",

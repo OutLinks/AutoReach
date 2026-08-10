@@ -23,7 +23,7 @@ AutoReach is an API-only FastAPI service. It does not bundle a frontend.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/setup` | Report database-selection status |
-| `POST` | `/v1/setup` | Select a persistent SQLite database and apply initial settings |
+| `POST` | `/v1/setup` | Select SQLite locally, or initialize D1 settings in Cloudflare |
 | `GET` | `/v1/settings` | List database-backed settings with secret values masked |
 | `PATCH` | `/v1/settings` | Update provider, sender, scheduler, and pipeline settings |
 | `GET` | `/v1/config` | Read the effective non-secret runtime configuration |
@@ -143,4 +143,7 @@ keyword fallback unless the LLM orchestrator is explicitly enabled.
 | `POST` | `/v1/events/sender` | Queue a normalized sender event |
 
 Provider-specific webhook signatures must be validated before forwarding a
-normalized event to `/v1/events/sender`.
+normalized event to `/v1/events/sender`. Include the provider's stable
+`provider_event_id`; AutoReach uses it as the durable job/event deduplication
+key. The Worker bearer token protects this normalized endpoint, but it is not a
+replacement for validating the provider signature at the webhook ingress.

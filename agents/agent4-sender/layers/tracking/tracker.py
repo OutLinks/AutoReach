@@ -45,8 +45,12 @@ class TrackingLayer:
         """Called right after a provider accepts a send."""
         self.delivery.mark_delivered(sent_email_id, lead_id)
 
-    def record_reply(self, sent_email_id: str, snippet: str = "") -> ReplyNotification | None:
-        return self.reply.record_reply(sent_email_id, snippet)
+    def record_reply(
+        self, sent_email_id: str, snippet: str = "", provider_event_id: str = ""
+    ) -> ReplyNotification | None:
+        return self.reply.record_reply(
+            sent_email_id, snippet, provider_event_id=provider_event_id
+        )
 
     def engagement_summary(self) -> dict[str, int]:
         return self._store.count_events_by_type()

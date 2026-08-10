@@ -6,6 +6,10 @@
 .env.*
 !.env.example
 .data
+.pytest_cache
+.wrangler
+node_modules
+worker-configuration.d.ts
 **/__pycache__
 **/*.pyc
 api/output

@@ -51,6 +51,9 @@ class D1SendStore:
         state.updated_at = datetime.utcnow()
         self._call("upsert-sequence", {"sequence": state.model_dump(mode="json")})
 
+    def schedule_followup(self, state: SequenceState) -> dict[str, Any]:
+        return self._call("schedule-followup", {"sequence": state.model_dump(mode="json")})
+
     def get_sequence(self, lead_id: str) -> Optional[SequenceState]:
         value = self._call("get-sequence", {"lead_id": lead_id}).get("sequence")
         return SequenceState.model_validate(value) if value else None
@@ -64,6 +67,31 @@ class D1SendStore:
 
     def list_accounts(self) -> list[SendingAccount]:
         return [SendingAccount.model_validate(value) for value in self._call("list-accounts", {}).get("items", [])]
+
+    def reserve_capacity(
+        self,
+        *,
+        idempotency_key: str,
+        account_email: str,
+        recipient: str,
+        reserved_at: datetime,
+        daily_limit: int,
+        hourly_limit: int,
+        burst_per_minute: int,
+        domain_spacing_seconds: int,
+    ) -> bool:
+        domain = recipient.rsplit("@", 1)[-1].lower()
+        value = self._call("reserve-capacity", {
+            "idempotency_key": idempotency_key,
+            "account_email": account_email,
+            "recipient_domain": domain,
+            "reserved_at": reserved_at.isoformat(),
+            "daily_limit": daily_limit,
+            "hourly_limit": hourly_limit,
+            "burst_per_minute": burst_per_minute,
+            "domain_spacing_seconds": domain_spacing_seconds,
+        })
+        return bool(value.get("reserved"))
 
     def add_suppression(self, entry: SuppressionEntry) -> None:
         self._call("upsert-suppression", {"entry": entry.model_dump(mode="json")})

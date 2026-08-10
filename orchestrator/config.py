@@ -110,6 +110,9 @@ class OrchestratorConfig:
     db_path: str = field(
         default_factory=lambda: str(orchestrator_output_dir() / "orchestrator.db")
     )
+    storage_backend: str = field(
+        default_factory=lambda: os.getenv("AUTOREACH_STORAGE_BACKEND", "sqlite").lower()
+    )
 
     targeting: TargetingConfig = field(default_factory=TargetingConfig)
     volume: VolumeConfig = field(default_factory=VolumeConfig)
@@ -156,6 +159,8 @@ class OrchestratorConfig:
     @classmethod
     def from_env(cls) -> "OrchestratorConfig":
         config = cls()
+        if config.storage_backend not in {"sqlite", "d1"}:
+            raise ValueError("AUTOREACH_STORAGE_BACKEND must be 'sqlite' or 'd1'")
         config.simulate = _env_bool("AUTOREACH_SIMULATE", True)
         config.llm_orchestrator_enabled = _env_bool(
             "AUTOREACH_LLM_ORCHESTRATOR_ENABLED", not config.simulate

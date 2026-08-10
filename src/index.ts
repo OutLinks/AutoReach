@@ -5,7 +5,9 @@ import {
   type WorkflowStep,
 } from "cloudflare:workers";
 
-import { dispatchPendingJobs, handleArtifactBridge, handleD1Bridge, handleEmailWriterBridge, handleLeadPipelineBridge, handleResearchIndexBridge, handleSenderBridge } from "./d1-bridge";
+import { dispatchPendingJobs, enqueueScheduledTick, handleArtifactBridge, handleD1Bridge, handleEmailWriterBridge, handleLeadPipelineBridge, handleOrchestratorBridge, handleResearchIndexBridge, handleSenderBridge } from "./d1-bridge";
+import { handleConfigStateBridge, handleWorkflowBridge } from "./workflow-bridge";
+import { handleReplyBridge } from "./reply-bridge";
 
 const PRIMARY_CONTAINER_NAME = "autoreach-primary";
 const INTERNAL_HEADER_NAMES = [
@@ -78,11 +80,14 @@ export class AutoReachContainer extends Container {
     AUTOREACH_RUNTIME: "cloudflare-container",
     AUTOREACH_EXECUTOR_MODE: "external",
     AUTOREACH_SCHEDULER_ENABLED: "false",
+    AUTOREACH_STORAGE_BACKEND: "d1",
     AUTOREACH_LEAD_PIPELINE_BACKEND: "d1",
     AUTOREACH_ARTIFACT_BACKEND: "r2",
     AUTOREACH_EMAIL_WRITER_STORAGE_BACKEND: "d1",
     AUTOREACH_RESEARCH_READER_BACKEND: "d1",
     AUTOREACH_SENDER_STORAGE_BACKEND: "d1",
+    AUTOREACH_REPLY_STORAGE_BACKEND: "d1",
+    AUTOREACH_REPLY_SOURCE_BACKEND: "d1",
   };
 }
 
@@ -99,6 +104,14 @@ AutoReachContainer.outboundByHost = {
       ? handleEmailWriterBridge(request, env)
       : pathname.startsWith("/v1/research-index/")
       ? handleResearchIndexBridge(request, env)
+      : pathname.startsWith("/v1/orchestrator/")
+      ? handleOrchestratorBridge(request, env)
+      : pathname.startsWith("/v1/workflows/")
+      ? handleWorkflowBridge(request, env)
+      : pathname.startsWith("/v1/config-state/")
+      ? handleConfigStateBridge(request, env)
+      : pathname.startsWith("/v1/replies/")
+      ? handleReplyBridge(request, env)
       : handleD1Bridge(request, env);
   },
 };
@@ -143,12 +156,18 @@ function sanitizedRequest(request: Request): Request {
 function containerEnvironment(env: Env): Record<string, string> {
   const variables: Record<string, string> = {
     PORT: "8000",
+    AUTOREACH_ENV: env.AUTOREACH_ENV || "production",
     AUTOREACH_RUNTIME: "cloudflare-container",
     AUTOREACH_EXECUTOR_MODE: "external",
     AUTOREACH_SCHEDULER_ENABLED: "false",
+    AUTOREACH_STORAGE_BACKEND: "d1",
     AUTOREACH_LEAD_PIPELINE_BACKEND: "d1",
     AUTOREACH_ARTIFACT_BACKEND: "r2",
+    AUTOREACH_EMAIL_WRITER_STORAGE_BACKEND: "d1",
+    AUTOREACH_RESEARCH_READER_BACKEND: "d1",
     AUTOREACH_SENDER_STORAGE_BACKEND: "d1",
+    AUTOREACH_REPLY_STORAGE_BACKEND: "d1",
+    AUTOREACH_REPLY_SOURCE_BACKEND: "d1",
     AUTOREACH_INTERNAL_HMAC_SECRET: env.AUTOREACH_INTERNAL_HMAC_SECRET,
   };
   for (const name of CONTAINER_SECRET_NAMES) {
@@ -254,8 +273,8 @@ export default {
   },
 
   async scheduled(_controller, env): Promise<void> {
-    // The scheduler runs in UTC. Local-time campaign calculations are persisted
-    // as UTC deadlines by the future sequence repository.
+    // Cron is the durable source of periodic pipeline ticks and outbox recovery.
+    await enqueueScheduledTick(env);
     await dispatchPendingJobs(env);
   },
 } satisfies ExportedHandler<Env>;

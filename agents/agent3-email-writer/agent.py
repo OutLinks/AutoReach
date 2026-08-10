@@ -54,6 +54,12 @@ class EmailWriterAgent:
         self._quality = QualityLayer(config)
         self._db = D1EmailDatabase() if config.storage_backend == "d1" else EmailDatabase(config.db_path)
 
+    def emails_by_job(self, job_id: str) -> list[dict]:
+        return self._db.get_emails_by_job(job_id)
+
+    def update_email_status(self, email_id: str, status: str) -> None:
+        self._db.update_status(email_id, status)
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     async def run(

@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted for incremental implementation; local SQLite/filesystem storage remains
-development-only until the D1/R2 persistence cutover is complete.
+Accepted and implemented. Local SQLite, Redis, JSONL, and filesystem handoffs
+remain development-only adapters.
 
 ## Context
 
@@ -39,14 +39,18 @@ token. A Queue message contains only the job ID. Cron requeues expired claims
 through the transactional outbox, which makes a container loss recoverable
 without reclaiming a live attempt. The internal execution endpoint requires an
 HMAC signature created by the Worker; user-provided internal headers are
-stripped at the edge. Sender records will use durable idempotency keys and
-provider message IDs before any send attempt.
+stripped at the edge. Sender records use durable idempotency keys, D1 capacity
+reservations, and provider message IDs around every send attempt. A reserved
+ambiguous delivery is never automatically resent. Provider events are
+deduplicated by stable provider event IDs. Agent 5 claims inbound events and
+reserves deterministic outbound replies before provider I/O.
 
 ## Consequences
 
-The Worker wrapper, D1-backed job queue, Agent 1 D1 pipeline adapter, Agent 2
-R2 writer plus D1 profile index, Agent 3 D1 written-email repository, and Agent
-4 D1 sender-state adapter are implemented. It does not make the remaining
-SQLite workflow/orchestrator, delayed sequence registration, or Agent 5
-repositories production-safe. Their persistence and handoff cutover is a
-separate, tested phase before Cloudflare deployment.
+The job queue, settings, orchestrator, interactive workflows, campaigns, leads,
+mailbox, Agent 1 pipeline/dedupe, Agent 2 R2 profile index, Agent 3 written
+emails, Agent 4 sender/sequence/tracking state, and Agent 5 conversations/reply
+events all have named D1/R2 production repositories. Cron produces
+timezone-aware durable tick jobs, and Cloudflare Workflows own multi-day
+follow-up sleeps. Production uses one container instance initially; increasing
+concurrency requires a separate capacity and provider-safety review.

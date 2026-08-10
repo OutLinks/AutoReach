@@ -56,15 +56,39 @@ class OutputLayer:
 
         # 2. Send the reply to the lead.
         if result.should_send_reply and result.reply_body:
-            ok, message_id = await self._sender.send(
-                to_email=reply.from_email,
-                subject=result.reply_subject,
-                body=result.reply_body,
-                in_reply_to=reply.message_id,
-            )
-            if ok:
-                summary["reply_sent"] = True
-                self._record_outbound(reply, result, message_id)
+            reservation_id = f"outbound:{reply.id}"
+            reserve = getattr(self._store, "reserve_outbound", None)
+            reserved = True
+            if callable(reserve):
+                reserved = reserve(ConversationMessage(
+                    id=reservation_id,
+                    conversation_id=reply.lead_id,
+                    lead_id=reply.lead_id,
+                    direction="outbound",
+                    body=result.reply_body,
+                    message_id=f"autoreach-reply:{reply.id}",
+                    action_taken="delivery_reserved",
+                ))
+            if not reserved:
+                # A previous attempt crossed the delivery boundary. Never send
+                # it again automatically; reconciliation can inspect the
+                # reserved durable message.
+                logger.warning("OutputLayer: outbound reply %s already reserved", reservation_id)
+            else:
+                ok, message_id = await self._sender.send(
+                    to_email=reply.from_email,
+                    subject=result.reply_subject,
+                    body=result.reply_body,
+                    in_reply_to=reply.message_id,
+                    idempotency_key=reply.id,
+                )
+                finish = getattr(self._store, "finish_outbound", None)
+                if callable(finish):
+                    finish(reservation_id, message_id, result.action_type, ok)
+                if ok:
+                    summary["reply_sent"] = True
+                    if not callable(reserve):
+                        self._record_outbound(reply, result, message_id)
 
         # 3. Hand-off + notifications.
         if result.handoff is not None:
@@ -99,6 +123,23 @@ class OutputLayer:
         understanding: Understanding,
         result: ActionResult,
     ) -> None:
+        inbound = ConversationMessage(
+            id=reply.id,
+            conversation_id=reply.lead_id,
+            lead_id=reply.lead_id,
+            direction="inbound",
+            body=reply.clean_body or reply.raw_body,
+            message_id=reply.message_id,
+            intent=understanding.intent.intent,
+            sentiment=understanding.sentiment.sentiment,
+            action_taken=result.action_type,
+        )
+        inserted = self._store.add_message(inbound)
+        if getattr(self._store, "durable", False) and not inserted:
+            # Repair a crash between the durable message insert and the
+            # conversation roll-up without incrementing an existing thread.
+            if self._store.get_conversation(reply.lead_id) is not None:
+                return
         conv = self._store.get_conversation(reply.lead_id) or Conversation(
             id=reply.lead_id, lead_id=reply.lead_id, recipient=reply.from_email
         )
@@ -111,19 +152,6 @@ class OutputLayer:
             conv.escalated = True
         self._store.upsert_conversation(conv)
 
-        self._store.add_message(
-            ConversationMessage(
-                id=reply.id,
-                conversation_id=reply.lead_id,
-                lead_id=reply.lead_id,
-                direction="inbound",
-                body=reply.clean_body or reply.raw_body,
-                message_id=reply.message_id,
-                intent=understanding.intent.intent,
-                sentiment=understanding.sentiment.sentiment,
-                action_taken=result.action_type,
-            )
-        )
 
     def _record_outbound(self, reply: IncomingReply, result: ActionResult, message_id: str) -> None:
         conv = self._store.get_conversation(reply.lead_id)
@@ -144,6 +172,10 @@ class OutputLayer:
     # ── Cross-agent signal ─────────────────────────────────────────────────────
 
     def _signal_stop_sequence(self, lead_id: str, status: str) -> None:
+        stop = getattr(self._store, "stop_sequence", None)
+        if callable(stop):
+            stop(lead_id, status)
+            return
         try:
             self._signals_dir.mkdir(parents=True, exist_ok=True)
             path = self._signals_dir / f"stop_{lead_id}.json"

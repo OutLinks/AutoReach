@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Generator, Optional
 
 from core.runtime_paths import agent_output_dir
+from core.worker_bridge import WorkerBridgeClient
 
 from ...models import IncomingReply
 from ...storage.conversation_store import ConversationStore
@@ -34,10 +35,13 @@ class ConversationLoader:
         emails_db_path: str,
         store: ConversationStore,
         leads_dir: Optional[Path] = None,
+        backend: str = "local",
     ) -> None:
         self._emails_db = emails_db_path
         self._store = store
         self._leads_dir = leads_dir or _AGENT1_OUTPUT_DIR
+        self._backend = backend
+        self._bridge = WorkerBridgeClient() if backend == "d1" else None
         self._lead_index: dict[str, dict] = {}
 
     def enrich(self, reply: IncomingReply) -> IncomingReply:
@@ -63,6 +67,10 @@ class ConversationLoader:
     # ── Sources ────────────────────────────────────────────────────────────────
 
     def _original_email(self, email_id: str) -> Optional[dict]:
+        if self._bridge is not None:
+            if not email_id:
+                return None
+            return self._bridge.call("email-writer", "get-email", {"id": email_id}).get("email")
         if not email_id or not Path(self._emails_db).exists():
             return None
         try:
@@ -80,6 +88,11 @@ class ConversationLoader:
     def _lead_for(self, lead_id: str) -> Optional[dict]:
         if not lead_id:
             return None
+        if self._bridge is not None:
+            leads = self._bridge.call(
+                "lead-pipeline", "list-leads", {"lead_ids": [lead_id]}
+            ).get("leads", [])
+            return leads[0] if leads else None
         if not self._lead_index:
             self._build_lead_index()
         return self._lead_index.get(lead_id)

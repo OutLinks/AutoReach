@@ -19,12 +19,14 @@ from orchestrator.models import DISCOVERED, NEW, PipelineLead
 from orchestrator.state_machine import STAGE_BY_NAME
 
 from .config_store import ConfigStore, DatabaseLocator, secret_setting_keys
+from .d1_config_store import D1ConfigStore
 from .executor import JobExecutor
 from .internal_auth import validate_job_execution
 from .jobs import JobRecord, build_job_repository
 from .scheduler import HourlyScheduler
 from .settings import AppSettings
 from .workflows import WorkflowStore
+from .d1_workflows import D1WorkflowStore
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,7 @@ class SenderEventRequest(BaseModel):
     detail: str = Field(default="", max_length=10_000)
     bounce_type: Literal["hard", "soft"] = "hard"
     url: str = Field(default="", max_length=4_000)
+    provider_event_id: str = Field(default="", max_length=500)
 
 
 class SetupRequest(BaseModel):
@@ -183,16 +186,21 @@ def create_app(
     async def start_runtime(
         application: FastAPI,
         database_path: Path,
-        config_store: ConfigStore,
+        config_store: ConfigStore | D1ConfigStore,
     ) -> None:
         config_store.apply_to_process(
             preserve_secret_environment=settings.executor_mode == "external"
         )
         config = OrchestratorConfig.from_env()
         config.db_path = str(database_path)
+        config.storage_backend = settings.storage_backend
         orchestrator = orchestrator_factory(config)
         job_store = build_job_repository(database_path, settings.storage_backend)
-        workflow_store = WorkflowStore(database_path)
+        workflow_store = (
+            D1WorkflowStore()
+            if settings.storage_backend == "d1"
+            else WorkflowStore(database_path)
+        )
         executor = JobExecutor(job_store, orchestrator, workflow_store)
         scheduler = HourlyScheduler(
             executor,
@@ -217,7 +225,11 @@ def create_app(
         application.state.runtime_lock = asyncio.Lock()
         application.state.database_locator = DatabaseLocator(settings.data_dir)
         database_path = application.state.database_locator.selected_path()
-        config_store = ConfigStore(database_path)
+        config_store = (
+            D1ConfigStore()
+            if settings.storage_backend == "d1"
+            else ConfigStore(database_path)
+        )
         await start_runtime(application, database_path, config_store)
         try:
             yield
@@ -277,11 +289,15 @@ def create_app(
         config_store: ConfigStore = application.state.config_store
         return {
             "configured": config_store.configured,
-            "database_engine": "sqlite",
+            "database_engine": settings.storage_backend,
             "default_database_path": (
                 ""
                 if config_store.configured
-                else str(application.state.database_locator.selected_path())
+                else (
+                    "d1://AUTOREACH_DB"
+                    if settings.storage_backend == "d1"
+                    else str(application.state.database_locator.selected_path())
+                )
             ),
         }
 
@@ -298,6 +314,15 @@ def create_app(
             current_store: ConfigStore = application.state.config_store
             if current_store.configured:
                 raise HTTPException(status_code=409, detail="AutoReach is already configured")
+            if settings.storage_backend == "d1":
+                try:
+                    current_store.initialize(request.settings)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                await stop_runtime(application)
+                await start_runtime(application, application.state.database_path, current_store)
+                return {"configured": True, "database_path": "d1://AUTOREACH_DB"}
+
             locator: DatabaseLocator = application.state.database_locator
             try:
                 selected = locator.validate(request.database_path)
@@ -350,7 +375,7 @@ def create_app(
             "reply_handling_enabled": orchestrator.config.reply_handling_enabled,
             "scheduler_enabled": config_store.get_bool("scheduler_enabled"),
             "scheduler_timezone": config_store.get("scheduler_timezone"),
-            "database_engine": "sqlite",
+            "database_engine": settings.storage_backend,
             "stages": list(STAGE_BY_NAME),
         }
 
@@ -878,7 +903,15 @@ def create_app(
     )
     async def sender_event(request: SenderEventRequest) -> JobRecord:
         """Accept a normalized event after a provider-specific signature check upstream."""
-        return application.state.executor.submit("sender.event", request.model_dump())
+        return application.state.executor.submit(
+            "sender.event",
+            request.model_dump(),
+            dedupe_key=(
+                f"sender-event:{request.provider_event_id}"
+                if request.provider_event_id
+                else None
+            ),
+        )
 
     @application.get("/v1/agents")
     async def list_agents() -> dict[str, Any]:

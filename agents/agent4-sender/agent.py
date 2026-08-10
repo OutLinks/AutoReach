@@ -68,6 +68,22 @@ class SenderAgent:
         self._sequence = SequenceLayer(config, self._store)
         self._reputation = ReputationLayer(config, self._store)
 
+    def get_sent_record(self, sent_id: str) -> Optional[dict]:
+        return self._store.get_sent(sent_id)
+
+    def list_sent_records(self) -> list[dict]:
+        return self._store.list_sent()
+
+    def events_for(self, sent_id: str) -> list[dict]:
+        return self._store.get_events(sent_id)
+
+    def latest_provider_message_id(self, lead_id: str) -> str:
+        sent = self._store.latest_sent_for_lead(lead_id) or {}
+        return str(sent.get("message_id") or "")
+
+    def sequence_for(self, lead_id: str):
+        return self._store.get_sequence(lead_id)
+
     # ── Batch: initial (day-0) sends ───────────────────────────────────────────
 
     async def run_initial(
@@ -195,6 +211,34 @@ class SenderAgent:
         self._reputation.enforce(self._scheduling.accounts)
         return self._finalize(job)
 
+    async def run_scheduled_followup(
+        self,
+        lead_id: str,
+        expected_step: str,
+        job_id: str,
+        now: Optional[datetime] = None,
+    ) -> SendJob:
+        """Execute one Workflow-addressed sequence step, safely and idempotently."""
+        now = now or datetime.now(timezone.utc)
+        state = self._store.get_sequence(lead_id)
+        job = SendJob(id=job_id, kind="followups", status="in_progress")
+        if (
+            state is None
+            or not state.is_active
+            or state.current_step != expected_step
+            or state.next_send_at is None
+        ):
+            return self._finalize(job)
+        due = state.next_send_at
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        if due > now:
+            raise RuntimeError("Follow-up Workflow fired before its persisted UTC deadline")
+        job.total = 1
+        self._store.upsert_job(job)
+        await self._send_followup(state, job, now)
+        return self._finalize(job)
+
     async def send_message(
         self,
         *,
@@ -320,6 +364,22 @@ class SenderAgent:
             logger.warning("SenderAgent: delivery %s is awaiting reconciliation", idempotency_key)
             return None
 
+        reserve = getattr(self._store, "reserve_capacity", None)
+        if callable(reserve) and not reserve(
+            idempotency_key=idempotency_key,
+            account_email=account_email,
+            recipient=recipient,
+            reserved_at=datetime.now(timezone.utc),
+            daily_limit=account.daily_limit,
+            hourly_limit=account.hourly_limit,
+            burst_per_minute=self._config.burst_per_minute,
+            domain_spacing_seconds=(
+                0 if step == "manual_reply" else self._config.min_seconds_between_same_domain
+            ),
+        ):
+            logger.info("SenderAgent: durable volume limit denied %s", recipient)
+            return None
+
         # Build the record first so tracking can key off its id.
         sent = SentEmail(
             id=str(uuid5(NAMESPACE_URL, f"autoreach:{idempotency_key}")),
@@ -366,9 +426,13 @@ class SenderAgent:
 
     # ── Event hooks (called by webhooks / tracking server) ─────────────────────
 
-    def handle_reply(self, sent_email_id: str, snippet: str = "") -> Optional[ReplyNotification]:
+    def handle_reply(
+        self, sent_email_id: str, snippet: str = "", provider_event_id: str = ""
+    ) -> Optional[ReplyNotification]:
         """A reply arrived → pause the sequence and optionally hand off to Agent 5."""
-        notification = self._tracking.record_reply(sent_email_id, snippet)
+        notification = self._tracking.record_reply(
+            sent_email_id, snippet, provider_event_id
+        )
         if notification:
             self._sequence.pause_on_reply(notification.lead_id)
         return notification

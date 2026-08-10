@@ -26,8 +26,10 @@ logger = logging.getLogger(__name__)
 
 class InputLayer:
     def __init__(self, config: ServiceConfig, store: ConversationStore) -> None:
-        self._reader = ReplyReader(config.replies_dir)
-        self._loader = ConversationLoader(config.emails_db_path, store)
+        self._reader = ReplyReader(config.replies_dir, backend=config.source_backend)
+        self._loader = ConversationLoader(
+            config.emails_db_path, store, backend=config.source_backend
+        )
 
     def collect(self, mark_done: bool = True) -> list[IncomingReply]:
         """Read, parse, and enrich every pending reply."""

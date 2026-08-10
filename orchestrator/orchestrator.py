@@ -33,6 +33,7 @@ from .config import OrchestratorConfig
 from .models import DailyReport, HealthSnapshot, PipelineLead, RunRecord, StageResult
 from .responsibilities import Control, Decide, Monitor, Optimize, Report, Trigger
 from .store import OrchestratorStore
+from .d1_store import D1OrchestratorStore
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,11 @@ _CYCLE_STAGE_NAMES = ["reply", "followup", "send", "write", "research"]
 class Orchestrator:
     def __init__(self, config: Optional[OrchestratorConfig] = None) -> None:
         self._config = config or OrchestratorConfig()
-        self._store = OrchestratorStore(self._config.db_path)
+        self._store = (
+            D1OrchestratorStore()
+            if self._config.storage_backend == "d1"
+            else OrchestratorStore(self._config.db_path)
+        )
         self._adapters = build_adapters(self._config)
         self._retry = RetryPolicy(self._config.retry)
 
@@ -61,7 +66,7 @@ class Orchestrator:
         self._report = Report(self._store)
 
     @property
-    def store(self) -> OrchestratorStore:
+    def store(self) -> OrchestratorStore | D1OrchestratorStore:
         return self._store
 
     @property

@@ -38,6 +38,12 @@ class ServiceConfig:
             or (agent_output_dir("agent5-reply-handler") / "conversations.db")
         )
     )
+    storage_backend: str = field(
+        default_factory=lambda: os.getenv("AUTOREACH_REPLY_STORAGE_BACKEND", "sqlite").lower()
+    )
+    source_backend: str = field(
+        default_factory=lambda: os.getenv("AUTOREACH_REPLY_SOURCE_BACKEND", "local").lower()
+    )
 
     # Where Agent 4 drops reply hand-off files.
     replies_dir: str = field(
@@ -91,4 +97,8 @@ class ServiceConfig:
             cfg.simulate = os.getenv("AGENT5_SIMULATE", "true").lower() != "false"
         if os.getenv("CALENDLY_LINK"):
             cfg.calendly_link = os.getenv("CALENDLY_LINK", cfg.calendly_link)
+        if cfg.storage_backend not in {"sqlite", "d1"}:
+            raise ValueError("AUTOREACH_REPLY_STORAGE_BACKEND must be 'sqlite' or 'd1'")
+        if cfg.source_backend not in {"local", "d1"}:
+            raise ValueError("AUTOREACH_REPLY_SOURCE_BACKEND must be 'local' or 'd1'")
         return cfg

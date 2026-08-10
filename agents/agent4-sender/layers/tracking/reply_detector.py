@@ -18,6 +18,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from pydantic import BaseModel
 
@@ -58,6 +59,7 @@ class ReplyDetector:
         sent_email_id: str,
         snippet: str = "",
         lead_id: str = "",
+        provider_event_id: str = "",
     ) -> ReplyNotification | None:
         sent = self._store.get_sent(sent_email_id)
         if not sent:
@@ -67,10 +69,12 @@ class ReplyDetector:
         lead_id = lead_id or sent.get("lead_id", "")
         self._store.insert_event(
             TrackingEvent(
+                id=provider_event_id or str(uuid4()),
                 sent_email_id=sent_email_id,
                 lead_id=lead_id,
                 event_type="reply",
                 detail=snippet[:280],
+                metadata={"provider_event_id": provider_event_id} if provider_event_id else {},
             )
         )
         self._store.update_sent_status(sent_email_id, "replied", replied=True)

@@ -32,6 +32,7 @@ from uuid import uuid4
 from .config import ServiceConfig
 from .models import ACTION_HUMAN_HANDOFF, IncomingReply, ReplyJob
 from .storage.conversation_store import ConversationStore
+from .storage.d1_conversation_store import D1ConversationStore
 from .layers.input.input_layer import InputLayer
 from .layers.understanding.understanding_layer import UnderstandingLayer
 from .layers.action.action_layer import ActionLayer
@@ -43,7 +44,11 @@ logger = logging.getLogger(__name__)
 class ReplyHandlerAgent:
     def __init__(self, config: ServiceConfig) -> None:
         self._config = config
-        self._store = ConversationStore(config.db_path)
+        self._store = (
+            D1ConversationStore()
+            if config.storage_backend == "d1"
+            else ConversationStore(config.db_path)
+        )
 
         self._input = InputLayer(config, self._store)
         self._understanding = UnderstandingLayer(config)
@@ -76,6 +81,13 @@ class ReplyHandlerAgent:
         await asyncio.gather(*(worker(r) for r in replies))
         return self._finalize(job)
 
+    def conversation_status(self, lead_id: str) -> str:
+        conversation = self._store.get_conversation(lead_id)
+        return conversation.status if conversation else ""
+
+    def close(self) -> None:
+        self._store.close()
+
     async def handle_payload(self, payload: dict) -> ReplyJob:
         """Handle a single reply delivered directly (e.g. a provider webhook)."""
         if not self._config.enabled:
@@ -83,7 +95,23 @@ class ReplyHandlerAgent:
             return self._finalize(ReplyJob(id=str(uuid4()), total=1, skipped=1, status="in_progress"))
         job = ReplyJob(id=str(uuid4()), total=1, status="in_progress")
         reply = self._input.prepare_payload(payload)
-        await self._process(reply, job)
+        claim = getattr(self._store, "claim_inbound", None)
+        lease = claim(
+            reply.id, str(payload.get("provider_event_id") or ""), payload
+        ) if callable(claim) else None
+        if callable(claim) and lease is None:
+            job.skipped = 1
+            return self._finalize(job)
+        try:
+            await self._process(reply, job)
+        except Exception as exc:
+            finish = getattr(self._store, "finish_inbound", None)
+            if callable(finish) and lease:
+                finish(reply.id, lease, f"{type(exc).__name__}: {exc}")
+            raise
+        finish = getattr(self._store, "finish_inbound", None)
+        if callable(finish) and lease:
+            finish(reply.id, lease)
         return self._finalize(job)
 
     # ── Pipeline ───────────────────────────────────────────────────────────────
@@ -120,6 +148,8 @@ class ReplyHandlerAgent:
             )
         except Exception as exc:
             logger.error("ReplyHandlerAgent: error handling lead %s — %s", reply.lead_id, exc)
+            if getattr(self._store, "durable", False):
+                raise
             job.skipped += 1
 
     # ── Internal ───────────────────────────────────────────────────────────────

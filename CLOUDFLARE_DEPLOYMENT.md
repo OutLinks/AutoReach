@@ -1,13 +1,11 @@
-# Cloudflare Containers migration deployment
+# Cloudflare Containers deployment
 
-> Status: foundation only. The Worker and Container wrapper are implemented,
-> but important Python paths still use local SQLite and filesystem artifacts.
-> Agent 1 has a D1 pipeline adapter; Agent 2 indexes R2 research profiles in
-> D1; Agent 3 reads that durable chain and writes D1 email records; and Agent 4
-> reads those D1 records and stores sender state in D1. The orchestrator,
-> interactive workflow, delayed sequence registration, and Agent 5 repositories
-> have not cut over. Do not deploy this
-> revision as production until that migration is complete.
+The production runtime keeps FastAPI and all five Python agents in one stable
+Cloudflare Container. The TypeScript Worker owns authentication, container
+routing, Cron, Queue consumption, delayed Workflows, and D1/R2 access. Local
+SQLite, Redis, JSONL, and the in-process scheduler remain development adapters
+only; every production backend is selected explicitly with `d1`/`r2` container
+environment variables.
 
 ## Resources
 
@@ -31,6 +29,10 @@ Apply D1 migrations after the database is bound:
 npx wrangler d1 migrations apply autoreach --remote
 ```
 
+Run `npm run cf:preflight` after migrations and secrets are configured. It
+rejects the placeholder database ID, missing minimum secrets, and unapplied
+remote migrations.
+
 ## Secrets
 
 Set Worker Secrets; never send these values through `PATCH /v1/settings` in a
@@ -40,6 +42,10 @@ Cloudflare production deployment:
 npx wrangler secret put AUTOREACH_API_TOKEN
 npx wrangler secret put AUTOREACH_INTERNAL_HMAC_SECRET
 npx wrangler secret put SMTP_PASSWORD
+# SMTP connection values are injected the same way:
+npx wrangler secret put SMTP_HOST
+npx wrangler secret put SMTP_PORT
+npx wrangler secret put SMTP_USERNAME
 # Add only the provider secrets actively used, for example:
 npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put TAVILY_API_KEY
@@ -55,7 +61,7 @@ Python remains the local development path:
 
 ```bash
 AUTOREACH_DATA_DIR=.data .venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
-.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m pytest -q
 ```
 
 For the Worker wrapper, install Node dependencies and use Wrangler. Docker must
@@ -63,7 +69,7 @@ be running because the Worker configuration refers to `./Dockerfile`:
 
 ```bash
 npm install
-npm run cf:check
+npm run cf:verify
 npm run cf:dev
 ```
 
@@ -78,27 +84,66 @@ curl -fsS http://127.0.0.1:8000/healthz
 
 ## Deployment and verification
 
-After the durable-storage cutover lands:
-
 ```bash
+npm run cf:preflight
 npm run cf:deploy
+curl -fsS https://YOUR_WORKER/healthz
 curl -fsS -H "Authorization: Bearer $AUTOREACH_API_TOKEN" \
   https://YOUR_WORKER/v1/config
 ```
 
-Create a simulated job, then poll it through the Worker. Queue retries appear
-in Workers/Queues observability; messages exceeding retry limits go to
-`autoreach-jobs-dlq`. Cron runs every five minutes in UTC. Follow-up Workflows
-must be inspected with `wrangler workflows instances describe` and tested by
-creating a near-future `due_at_utc` job before testing a multi-day send.
+Initialize D1-backed non-secret settings once (omit secret-shaped fields):
+
+```bash
+curl -fsS -X POST https://YOUR_WORKER/v1/setup \
+  -H "Authorization: Bearer $AUTOREACH_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"settings":{"simulate":true,"scheduler_timezone":"UTC"}}'
+```
+
+Create and poll a test job:
+
+```bash
+JOB_ID=$(curl -fsS -X POST https://YOUR_WORKER/v1/jobs/find \
+  -H "Authorization: Bearer $AUTOREACH_API_TOKEN" | jq -r .id)
+curl -fsS -H "Authorization: Bearer $AUTOREACH_API_TOKEN" \
+  "https://YOUR_WORKER/v1/jobs/$JOB_ID"
+```
+
+Keep simulation enabled for the first Queue/Cron test. Enable
+`scheduler_enabled` through `PATCH /v1/settings`, wait for the five-minute Cron,
+and confirm that only one `pipeline.tick` job exists for a given configured
+timezone/local hour. Cron normalizes its timestamp to UTC and records the IANA
+timezone in the job payload.
+
+For a delayed-email test, send one approved simulated email and inspect the
+new `sequence_states.workflow_instance_id`. Describe that instance with
+`npx wrangler workflows instances describe autoreach-followups INSTANCE_ID`.
+For a quick non-production test, use a temporary sequence deadline a few
+minutes ahead; verify one `sender.followup` job and one deterministic sender
+idempotency key. Restore the campaign cadence before enabling live sends.
+
+Queue delivery is at least once. D1 claim leases, deterministic event/send keys,
+and pre-provider capacity reservations make retries converge. Queue retries are
+visible in Workers observability; attempts beyond the configured limit move to
+`autoreach-jobs-dlq`. A `sending` or `delivery_ambiguous` reservation is not
+automatically resent—reconcile it with the provider before a manual retry.
 
 ## Cutover and rollback
 
-1. Quiesce the Compose deployment and back up its `/data` volume and Redis.
-2. Export SQLite tables and runtime artifacts, import relational records to D1,
-   and upload artifact bodies to R2 with checksums.
-3. Validate row counts, lead state counts, outbox entries, and sender
-   idempotency keys before enabling Queue dispatch.
-4. Deploy the Worker with the old Compose stack still stopped but recoverable.
-5. Roll back by disabling Worker routes/Queue dispatch and restoring the saved
-   Compose volume. Do not run both writers against the same campaign data.
+1. Disable the local scheduler and quiesce Compose. Back up its `/data` volume,
+   agent output directories, and Redis before exporting anything.
+2. Export canonical SQLite tables to newline-delimited JSON or SQL. Preserve
+   primary keys, timestamps, lead states, unique provider event IDs, and sender
+   idempotency keys; do not import plaintext credential settings.
+3. Import relational rows into D1 and upload research/source bodies to R2 under
+   stable keys. Populate `agent_artifacts` with the R2 key and SHA-256 checksum.
+4. Compare per-table rows, per-state lead counts, artifact checksums, active
+   sequences, suppressions, and sender idempotency keys. Resolve ambiguous sends
+   before continuing.
+5. Apply migrations, run `npm run cf:preflight`, and deploy with simulation
+   enabled. Verify health, direct jobs, Queue retries, Cron dedupe, and a short
+   Workflow before enabling credentials/live sending.
+6. Keep Compose stopped but recoverable through the first verified campaign.
+   Roll back by disabling the Worker route and Queue consumer, then restore the
+   saved Compose data. Never run both writers against the same campaign.

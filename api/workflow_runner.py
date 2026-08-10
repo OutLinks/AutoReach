@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from core.runtime_paths import agent_output_dir
+from core.worker_bridge import WorkerBridgeClient
 from orchestrator import models as pipeline_models
 from orchestrator.adapters.live import _load_agent
 from orchestrator.state_machine import STAGE_BY_NAME, available_stages
@@ -167,12 +168,9 @@ class WorkflowRunner:
         if lead_id and self._agent1_lead(lead_id) and has_enrichment:
             agent = module.ResearchAgent(config)
             await agent.run(job_id=job_id, lead_ids=[lead_id])
-            profile = self._latest_json_record(
-                agent_output_dir("agent2-research-analyst").glob(
-                    f"research_{job_id[:8]}_*.jsonl"
-                ),
-                key="lead_id",
-                value=lead_id,
+            profile = next(
+                (item for item in agent.final_profiles if item.get("lead_id") == lead_id),
+                None,
             )
         else:
             from agent2_research_analyst.layers.analysis.analyzer import AnalysisLayer
@@ -349,28 +347,14 @@ class WorkflowRunner:
             )
         agent = module.EmailWriterAgent(config)
         await agent.run(job_id=job_id, lead_ids=[lead.id], min_quality_score=0)
-        with closing(self._sqlite()) as connection:
-            row = connection.execute(
-                """
-                SELECT id, subject, body FROM emails
-                WHERE job_id = ? AND lead_id = ?
-                ORDER BY created_at DESC LIMIT 1
-                """,
-                (job_id, lead.id),
-            ).fetchone()
-            # API-generated copy always requires an explicit approval. Prevent
-            # the batch sender from seeing Agent 3's quality-gate approval as a
-            # user approval.
-            connection.execute(
-                """
-                UPDATE emails SET status = 'draft'
-                WHERE job_id = ? AND lead_id = ?
-                """,
-                (job_id, lead.id),
-            )
-            connection.commit()
+        row = next(
+            (item for item in reversed(agent.emails_by_job(job_id)) if item.get("lead_id") == lead.id),
+            None,
+        )
         if row is None:
             raise ValueError("Email writer did not produce a draft")
+        # API-generated copy always requires explicit human approval.
+        agent.update_email_status(row["id"], "draft")
         return {
             "source_email_id": row["id"],
             "subject": row["subject"],
@@ -500,14 +484,9 @@ class WorkflowRunner:
         result: Any,
         job_id: str,
     ) -> None:
-        with closing(self._sqlite()) as connection:
-            row = connection.execute(
-                "SELECT * FROM sent_emails WHERE id = ?",
-                (payload["sent_email_id"],),
-            ).fetchone()
-        if row is None:
+        sent = self._sender_agent().get_sent_record(payload["sent_email_id"])
+        if sent is None:
             return
-        sent = dict(row)
         if payload["event"] == "reply":
             self.workflows.add_mailbox_message(
                 message_id=f"inbound:{job_id}",
@@ -535,24 +514,8 @@ class WorkflowRunner:
 
     def sync_mailbox_history(self) -> None:
         """Materialize Agent 4 sends/events into the unified mailbox tables."""
-        try:
-            with closing(self._sqlite()) as connection:
-                sends = connection.execute(
-                    "SELECT * FROM sent_emails ORDER BY created_at"
-                ).fetchall()
-                replies = connection.execute(
-                    """
-                    SELECT e.*, s.recipient, s.account_email, s.subject
-                    FROM tracking_events e
-                    JOIN sent_emails s ON s.id = e.sent_email_id
-                    WHERE e.event_type = 'reply'
-                    ORDER BY e.occurred_at
-                    """
-                ).fetchall()
-        except Exception:
-            return
-        for row in sends:
-            sent = dict(row)
+        sends = self._sender_agent().list_sent_records()
+        for sent in sends:
             self.workflows.add_mailbox_message(
                 message_id=f"sent:{sent['id']}",
                 thread_id=sent["lead_id"],
@@ -565,19 +528,15 @@ class WorkflowRunner:
                 sent_at=sent["sent_at"] or sent["created_at"],
                 bounced=bool(sent["bounced"]),
             )
-        for row in replies:
-            reply = dict(row)
-            self.workflows.add_mailbox_message(
-                message_id=f"event:{reply['id']}",
-                thread_id=reply["lead_id"],
-                lead_id=reply["lead_id"],
-                direction="in",
-                from_addr=reply["recipient"],
-                to_addr=reply["account_email"],
-                subject=self._reply_subject(reply["subject"]),
-                body=reply["detail"] or "",
-                sent_at=reply["occurred_at"],
-            )
+            for event in self._sender_agent().events_for(sent["id"]):
+                if event.get("event_type") != "reply":
+                    continue
+                self.workflows.add_mailbox_message(
+                    message_id=f"event:{event['id']}", thread_id=sent["lead_id"],
+                    lead_id=sent["lead_id"], direction="in", from_addr=sent["recipient"],
+                    to_addr=sent["account_email"], subject=self._reply_subject(sent["subject"]),
+                    body=event.get("detail") or "", sent_at=event["occurred_at"],
+                )
 
     # LLM orchestrator tools
 
@@ -736,15 +695,9 @@ class WorkflowRunner:
             if filters.get(label):
                 prompt_parts.append(f"{label}: {filters[label]}")
         prompt_parts.append(f"Return at most {limit} leads.")
-        await module.LeadFinderAgent(config).run("\n".join(prompt_parts), job_id=job_id)
-        records: list[dict[str, Any]] = []
-        for path in sorted(
-            agent_output_dir("agent1-lead-finder").glob(
-                f"leads_{job_id[:8]}_*.jsonl"
-            )
-        ):
-            records.extend(self._read_jsonl(path))
-        return records[:limit]
+        agent = module.LeadFinderAgent(config)
+        await agent.run("\n".join(prompt_parts), job_id=job_id)
+        return [lead.model_dump(mode="json") for lead in agent.final_leads[:limit]]
 
     # Natural-language orchestrator
 
@@ -885,17 +838,14 @@ class WorkflowRunner:
         )
 
     def _latest_provider_message_id(self, lead_id: str) -> str:
-        with closing(self._sqlite()) as connection:
-            row = connection.execute(
-                """
-                SELECT message_id FROM sent_emails
-                WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1
-                """,
-                (lead_id,),
-            ).fetchone()
-        return row["message_id"] if row else ""
+        return self._sender_agent().latest_provider_message_id(lead_id)
 
     def _set_legacy_email_status(self, email_id: str, status: str) -> None:
+        if self.orchestrator.config.storage_backend == "d1":
+            WorkerBridgeClient().call(
+                "email-writer", "update-status", {"id": email_id, "status": status}
+            )
+            return
         with closing(self._sqlite()) as connection:
             connection.execute(
                 "UPDATE emails SET status = ? WHERE id = ?",
@@ -998,6 +948,11 @@ class WorkflowRunner:
     def _agent1_lead(self, lead_id: str) -> dict[str, Any] | None:
         if not lead_id:
             return None
+        if self.orchestrator.config.storage_backend == "d1":
+            leads = WorkerBridgeClient().call(
+                "lead-pipeline", "list-leads", {"lead_ids": [lead_id]}
+            ).get("leads", [])
+            return leads[0] if leads else None
         for path in sorted(agent_output_dir("agent1-lead-finder").glob("leads_*.jsonl")):
             for lead in self._read_jsonl(path):
                 if lead.get("id") == lead_id:

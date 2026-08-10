@@ -100,7 +100,10 @@ class LiveAdapter(AgentAdapter):
         campaign: CampaignBrief | None = None,
         records: list[dict] | None = None,
     ) -> int:
-        known = {lead.id for lead in store.all_leads()}
+        # Agent 1 persists its durable source record before orchestration runs.
+        # Those rows deliberately use the pre-pipeline ``qualified`` marker and
+        # still need to be promoted to DISCOVERED here.
+        known = {lead.id for lead in store.all_leads() if lead.state != "qualified"}
         added = 0
         sources = records
         if sources is None:
@@ -152,9 +155,12 @@ class LiveAdapter(AgentAdapter):
         statuses = ({item.get("lead_id"): item for item in profiles if item.get("lead_id")}
                     if profiles else _index_jsonl(out.glob("research_*.jsonl"), key="lead_id"))
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
+        missing_profiles: list[str] = []
         for lid in ctx.lead_ids:
             profile = statuses.get(lid)
             ok = bool(profile) and profile.get("status") in ("complete", "partial")
+            if profile is None:
+                missing_profiles.append(lid)
             if profile:
                 ctx.store.save_artifact(
                     artifact_id=f"research-profile:{lid}",
@@ -169,6 +175,11 @@ class LiveAdapter(AgentAdapter):
         result.processed = len(ctx.lead_ids)
         result.succeeded = len(result.advanced_ids)
         result.failed = result.processed - result.succeeded
+        if missing_profiles:
+            result.ok = False
+            result.errors.append(
+                f"Research profiles were not durably persisted for {len(missing_profiles)} lead(s)"
+            )
         return result
 
     # ── write ───────────────────────────────────────────────────────────────────
@@ -180,12 +191,22 @@ class LiveAdapter(AgentAdapter):
         if ctx.campaign:
             config.campaign_instruction = ctx.campaign.instruction_for("email_writer")
         agent = mod.EmailWriterAgent(config)
-        await agent.run(lead_ids=ctx.lead_ids)
-        db = Path(ctx.config.db_path)
-        rows = _read_db(db, "SELECT lead_id, status, quality_score FROM emails", "lead_id")
+        job = await agent.run(lead_ids=ctx.lead_ids)
+        if ctx.config.storage_backend == "d1":
+            rows = {
+                row["lead_id"]: row
+                for row in agent.emails_by_job(job.id)
+                if row.get("lead_id")
+            }
+        else:
+            db = Path(ctx.config.db_path)
+            rows = _read_db(db, "SELECT lead_id, status, quality_score FROM emails", "lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
+        missing_emails: list[str] = []
         for lid in ctx.lead_ids:
             row = rows.get(lid)
+            if row is None:
+                missing_emails.append(lid)
             approved = bool(row) and row.get("status") == "approved"
             score = (row or {}).get("quality_score") or 0.0
             result.outcomes[lid] = f"email_score={score:.2f}" if approved else "low_quality"
@@ -194,6 +215,11 @@ class LiveAdapter(AgentAdapter):
         result.processed = len(ctx.lead_ids)
         result.succeeded = len(result.advanced_ids)
         result.failed = result.processed - result.succeeded
+        if missing_emails:
+            result.ok = False
+            result.errors.append(
+                f"Written emails were not durably persisted for {len(missing_emails)} lead(s)"
+            )
         return result
 
     # ── send ────────────────────────────────────────────────────────────────────
@@ -215,8 +241,16 @@ class LiveAdapter(AgentAdapter):
         _relax_simulated_pacing(config, len(ctx.lead_ids))
         agent = mod.SenderAgent(config)
         await agent.run_initial(lead_ids=ctx.lead_ids)
-        db = Path(ctx.config.db_path)
-        rows = _read_db(db, "SELECT lead_id, status, bounced FROM sent_emails", "lead_id")
+        if ctx.config.storage_backend == "d1":
+            requested = set(ctx.lead_ids)
+            rows = {
+                row["lead_id"]: row
+                for row in agent.list_sent_records()
+                if row.get("lead_id") in requested
+            }
+        else:
+            db = Path(ctx.config.db_path)
+            rows = _read_db(db, "SELECT lead_id, status, bounced FROM sent_emails", "lead_id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
             row = rows.get(lid)
@@ -272,8 +306,18 @@ class LiveAdapter(AgentAdapter):
             config.campaign_instruction = ctx.campaign.instruction_for("reply_handler")
         agent = mod.ReplyHandlerAgent(config)
         await agent.run()
-        db = Path(ctx.config.db_path)
-        rows = _read_db(db, "SELECT id, status, escalated FROM conversations", "id")
+        if ctx.config.storage_backend == "d1":
+            rows = {
+                lead_id: {
+                    "id": lead_id,
+                    "status": agent.conversation_status(lead_id),
+                    "escalated": agent.conversation_status(lead_id) == "escalated",
+                }
+                for lead_id in ctx.lead_ids
+            }
+        else:
+            db = Path(ctx.config.db_path)
+            rows = _read_db(db, "SELECT id, status, escalated FROM conversations", "id")
         result = StageResult(stage=self.stage.name, agent=self.stage.agent)
         for lid in ctx.lead_ids:
             row = rows.get(lid) or {}
@@ -289,6 +333,7 @@ class LiveAdapter(AgentAdapter):
             result.outcomes[lid] = outcome
             result.advanced_ids.append(lid)
         result.processed = result.succeeded = len(ctx.lead_ids)
+        agent.close()
         return result
 
     async def ingest(
@@ -301,6 +346,10 @@ class LiveAdapter(AgentAdapter):
         if self.stage.name != REPLY.name:
             return 0
         now = now or datetime.now(timezone.utc)
+        # Production reply events are delivered directly through the durable
+        # sender-event job and do not rely on ephemeral hand-off files.
+        if config.storage_backend == "d1":
+            return 0
         replies_dir = agent_output_dir("agent4-sender") / "replies"
         if not replies_dir.exists():
             return 0

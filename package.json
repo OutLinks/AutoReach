@@ -7,7 +7,9 @@
     "cf:dev": "wrangler dev --port ${CONDUCTOR_PORT:-8787}",
     "cf:types": "wrangler types",
     "cf:check": "npm run cf:types && tsc --noEmit",
-    "cf:deploy": "wrangler deploy"
+    "cf:verify": "npm run cf:check && .venv/bin/python -m pytest -q && .venv/bin/python scripts/cloudflare-preflight.py --allow-placeholder",
+    "cf:preflight": ".venv/bin/python scripts/cloudflare-preflight.py --remote",
+    "cf:deploy": "npm run cf:preflight && wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/containers": "0.3.7",

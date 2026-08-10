@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from pydantic import BaseModel
 
 from orchestrator import Orchestrator
+from orchestrator import models as orchestrator_models
 from orchestrator.adapters.live import _load_agent
 from orchestrator.state_machine import STAGE_BY_NAME
 
@@ -123,9 +125,22 @@ class JobExecutor:
             stage = STAGE_BY_NAME[payload["stage"]]
             return await self.orchestrator.run_stage(stage)
         if job.kind == "pipeline.tick":
-            return await self.orchestrator.tick(datetime.fromisoformat(payload["now"]))
+            tick = datetime.fromisoformat(payload["now"])
+            if payload.get("timezone"):
+                tick = tick.astimezone(ZoneInfo(payload["timezone"]))
+            return await self.orchestrator.tick(tick)
+        if job.kind == "sender.followup":
+            sender = self._sender_agent()
+            result = await sender.run_scheduled_followup(
+                lead_id=payload["lead_id"],
+                expected_step=payload["expected_step"],
+                job_id=job.id,
+                now=datetime.now(timezone.utc),
+            )
+            self._reconcile_followup_lifecycle(payload["lead_id"], sender)
+            return result
         if job.kind == "sender.event":
-            result = self._handle_sender_event(payload)
+            result = await self._handle_sender_event(payload)
             self.workflow_runner.record_sender_event(payload, result, job.id)
             return result
         if job.kind in {
@@ -141,17 +156,49 @@ class JobExecutor:
             return await self.workflow_runner.execute(job.kind, payload, job.id)
         raise ValueError(f"Unsupported job kind: {job.kind}")
 
-    def _handle_sender_event(self, payload: dict[str, Any]) -> Any:
-        if self._sender is None:
-            module = _load_agent("agent4-sender", "agent4_sender")
-            config = module.ServiceConfig.from_env()
-            config.db_path = self.orchestrator.config.db_path
-            config.emails_db_path = self.orchestrator.config.db_path
-            self._sender = module.SenderAgent(config)
+    async def _handle_sender_event(self, payload: dict[str, Any]) -> Any:
+        self._sender_agent()
         sent_id = payload["sent_email_id"]
         event = payload["event"]
         if event == "reply":
-            return self._sender.handle_reply(sent_id, payload.get("detail", ""))
+            notification = self._sender.handle_reply(
+                sent_id, payload.get("detail", ""), payload.get("provider_event_id", "")
+            )
+            if notification is None:
+                return None
+            result: dict[str, Any] = {"notification": notification.model_dump(mode="json")}
+            lead = self.orchestrator.store.get_lead(notification.lead_id)
+            if lead:
+                previous = lead.state
+                lead.state = orchestrator_models.REPLIED
+                lead.replied_at = datetime.now(timezone.utc)
+                self.orchestrator.store.upsert_lead(lead)
+                self.orchestrator.store.log_event(lead.id, previous, lead.state, "sender:reply")
+            if self.orchestrator.config.reply_handling_enabled:
+                module = _load_agent("agent5-reply-handler", "agent5_reply_handler")
+                config = module.ServiceConfig.from_env()
+                config.enabled = True
+                handler = module.ReplyHandlerAgent(config)
+                reply_job = await handler.handle_payload({
+                    **notification.model_dump(mode="json"),
+                    "provider_event_id": payload.get("provider_event_id", ""),
+                })
+                result["reply_job"] = reply_job.model_dump(mode="json")
+                status = handler.conversation_status(notification.lead_id)
+                if lead and status:
+                    target = {
+                        "meeting_booked": orchestrator_models.MEETING_BOOKED,
+                        "closed": orchestrator_models.CLOSED,
+                    }.get(status)
+                    if target is None and reply_job.handled and status not in {"active", "escalated"}:
+                        target = orchestrator_models.HANDLED
+                    if target:
+                        previous = lead.state
+                        lead.state = target
+                        self.orchestrator.store.upsert_lead(lead)
+                        self.orchestrator.store.log_event(lead.id, previous, target, f"reply:{status}")
+                handler.close()
+            return result
         if event == "bounce":
             return {
                 "disposition": self._sender.handle_bounce(
@@ -169,3 +216,37 @@ class JobExecutor:
             self._sender.record_click(sent_id, payload.get("url", ""))
             return {"recorded": True}
         raise ValueError(f"Unsupported sender event: {event}")
+
+    def _sender_agent(self) -> Any:
+        if self._sender is None:
+            module = _load_agent("agent4-sender", "agent4_sender")
+            config = module.ServiceConfig.from_env()
+            config.db_path = self.orchestrator.config.db_path
+            config.emails_db_path = self.orchestrator.config.db_path
+            self._sender = module.SenderAgent(config)
+        return self._sender
+
+    def _reconcile_followup_lifecycle(self, lead_id: str, sender: Any) -> None:
+        """Reflect durable sequence progress in the canonical lead lifecycle."""
+        lead = self.orchestrator.store.get_lead(lead_id)
+        sequence = sender.sequence_for(lead_id)
+        if lead is None or sequence is None or lead.state in {
+            orchestrator_models.REPLIED,
+            orchestrator_models.HANDLED,
+            orchestrator_models.MEETING_BOOKED,
+            orchestrator_models.CLOSED,
+            orchestrator_models.DEAD,
+        }:
+            return
+        previous = lead.state
+        if sequence.status == "completed":
+            lead.state = orchestrator_models.CLOSED
+            note = "sequence exhausted"
+        elif sequence.is_active:
+            lead.state = orchestrator_models.FOLLOWING_UP
+            note = f"followup:{sequence.current_step}"
+        else:
+            return
+        if lead.state != previous:
+            self.orchestrator.store.upsert_lead(lead)
+            self.orchestrator.store.log_event(lead.id, previous, lead.state, note)

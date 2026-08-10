@@ -16,6 +16,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from ...models import IncomingReply
 
@@ -23,11 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 class ReplyReader:
-    def __init__(self, replies_dir: str) -> None:
+    def __init__(self, replies_dir: str, backend: str = "local") -> None:
         self._dir = Path(replies_dir)
+        self._backend = backend
 
     def read_pending(self, mark_done: bool = True) -> list[IncomingReply]:
         """Load all un-handled reply hand-offs from Agent 4."""
+        if self._backend == "d1":
+            # Production replies are passed directly from the durable sender
+            # event job; no filesystem inbox is authoritative.
+            return []
         if not self._dir.exists():
             logger.info("ReplyReader: no replies dir at %s", self._dir)
             return []
@@ -53,6 +59,7 @@ class ReplyReader:
     @staticmethod
     def from_payload(payload: dict) -> IncomingReply:
         return IncomingReply(
+            id=payload.get("provider_event_id") or payload.get("id") or str(uuid4()),
             lead_id=payload.get("lead_id", ""),
             conversation_id=payload.get("lead_id", ""),
             sent_email_id=payload.get("sent_email_id", ""),

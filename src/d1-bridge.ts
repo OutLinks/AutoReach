@@ -11,6 +11,7 @@ export interface D1BridgeEnv {
   AUTOREACH_DB: D1Database;
   AUTOREACH_JOBS: Queue<{ job_id: string }>;
   AUTOREACH_ARTIFACTS: R2Bucket;
+  AUTOREACH_FOLLOWUPS: Workflow;
 }
 
 /** R2 object bridge for container-produced JSON artifacts. */
@@ -122,6 +123,30 @@ async function createJob(database: D1Database, input: JsonObject): Promise<Respo
   return response({ job: await fetchJob(database, id), created: true }, 201);
 }
 
+export async function enqueueScheduledTick(env: D1BridgeEnv, now = new Date()): Promise<void> {
+  const setting = await env.AUTOREACH_DB.prepare(
+    "SELECT value_json FROM app_settings WHERE key='scheduler_enabled'",
+  ).first<{ value_json: string }>();
+  if (!setting || JSON.parse(setting.value_json) !== "true") return;
+  const timezone = await env.AUTOREACH_DB.prepare(
+    "SELECT value_json FROM app_settings WHERE key='scheduler_timezone'",
+  ).first<{ value_json: string }>();
+  const timezoneName = timezone ? String(JSON.parse(timezone.value_json)) : "UTC";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezoneName, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const part = (name: string) => parts.find((item) => item.type === name)?.value || "00";
+  const localHour = `${part("year")}-${part("month")}-${part("day")}T${part("hour")}`;
+  await createJob(env.AUTOREACH_DB, {
+    id: crypto.randomUUID(),
+    kind: "pipeline.tick",
+    payload: { now: now.toISOString(), timezone: timezoneName },
+    dedupe_key: `pipeline-tick:${timezoneName}:${localHour}`,
+    created_at: now.toISOString(),
+  });
+}
+
 async function claimJob(database: D1Database, input: JsonObject): Promise<Response> {
   const id = nonEmptyString(input.id);
   const leaseToken = nonEmptyString(input.lease_token);
@@ -184,6 +209,15 @@ export async function dispatchPendingJobs(env: D1BridgeEnv): Promise<number> {
   // the execution lease expires, never while an active attempt may still send.
   await recoverJobs(env.AUTOREACH_DB);
   const now = new Date().toISOString();
+  // Workflows are the precise multi-day timer. Cron is the recovery path if a
+  // Workflow instance exhausts its own dispatch retries: once the persisted
+  // deadline is due, materialize an outbox row and let the normal Queue path
+  // converge through the D1 job claim.
+  await env.AUTOREACH_DB.prepare(
+    `INSERT OR IGNORE INTO job_outbox (job_id,created_at)
+     SELECT id,? FROM jobs WHERE kind='sender.followup' AND status='queued'
+       AND json_extract(payload_json,'$.due_at_utc') <= ?`,
+  ).bind(now, now).run();
   const rows = await env.AUTOREACH_DB
     .prepare(
       `SELECT job_id FROM job_outbox
@@ -246,16 +280,20 @@ async function requeueFailedJob(database: D1Database, input: JsonObject): Promis
   if (!id) {
     return response({ error: "id is required" }, 422);
   }
-  const update = await database
-    .prepare(
+  const updates = await database.batch([
+    database.prepare(
       `UPDATE jobs
        SET status = 'queued', started_at = NULL, completed_at = NULL,
            lease_token = NULL, lease_expires_at = NULL
        WHERE id = ? AND status = 'failed'`,
     )
-    .bind(id)
-    .run();
-  if ((update.meta.changes || 0) !== 1) {
+    .bind(id),
+    database.prepare(
+      `UPDATE job_outbox SET dispatched_at=NULL,retry_after=NULL WHERE job_id=?
+       AND EXISTS (SELECT 1 FROM jobs WHERE id=? AND status='queued')`,
+    ).bind(id, id),
+  ]);
+  if ((updates[0].meta.changes || 0) !== 1) {
     return response({ job: null, requeued: false });
   }
   return response({ job: await fetchJob(database, id), requeued: true });
@@ -264,6 +302,14 @@ async function requeueFailedJob(database: D1Database, input: JsonObject): Promis
 async function recoverJobs(database: D1Database): Promise<Response> {
   const now = new Date().toISOString();
   await database.batch([
+    database
+      .prepare(
+        `UPDATE job_attempts SET status='failed',error='Execution lease expired',completed_at=?
+         WHERE status='running' AND job_id IN (
+           SELECT id FROM jobs WHERE status='running' AND lease_expires_at <= ?
+         )`,
+      )
+      .bind(now, now),
     database
       .prepare(
         `UPDATE jobs
@@ -393,12 +439,12 @@ export async function handleLeadPipelineBridge(request: Request, env: D1BridgeEn
         : [];
       const where = leadIds.length ? `WHERE id IN (${leadIds.map(() => "?").join(",")})` : "";
       const rows = await env.AUTOREACH_DB.prepare(
-        `SELECT id, metadata_json FROM leads ${where} ORDER BY updated_at DESC`,
-      ).bind(...leadIds).all<{ id: string; metadata_json: string }>();
+        `SELECT id, source_json FROM leads ${where} ORDER BY updated_at DESC`,
+      ).bind(...leadIds).all<{ id: string; source_json: string }>();
       const wanted = new Set(leadIds);
       const seen = new Set<string>();
       const leads = rows.results
-        .map((item) => ({ ...JSON.parse(item.metadata_json || "{}") as JsonObject, id: item.id }))
+        .map((item) => ({ ...JSON.parse(item.source_json || "{}") as JsonObject, id: item.id }))
         .filter((lead) => {
           const id = nonEmptyString(lead.id);
           if (!id || seen.has(id) || (wanted.size && !wanted.has(id))) return false;
@@ -417,14 +463,14 @@ export async function handleLeadPipelineBridge(request: Request, env: D1BridgeEn
         const createdAt = timestamp(lead.created_at);
         const updatedAt = timestamp(lead.updated_at);
         return [env.AUTOREACH_DB.prepare(
-          `INSERT INTO leads (id,state,email,company,industry,quality_score,priority,source_job,metadata_json,created_at,updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+          `INSERT INTO leads (id,state,email,company,industry,quality_score,priority,source_job,metadata_json,source_json,created_at,updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
            state=excluded.state,email=excluded.email,company=excluded.company,industry=excluded.industry,
            quality_score=excluded.quality_score,priority=excluded.priority,source_job=excluded.source_job,
-           metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`,
+           source_json=excluded.source_json,updated_at=excluded.updated_at`,
         ).bind(id, "qualified", lead.email || null, lead.company_name || null, lead.industry || null,
           Number(lead.lead_score || 0), Number(lead.lead_score || 0), input.job_id || "",
-          JSON.stringify(lead), createdAt, updatedAt)];
+          "{}", JSON.stringify(lead), createdAt, updatedAt)];
       });
       if (statements.length) await env.AUTOREACH_DB.batch(statements);
       return response({ persisted: statements.length });
@@ -644,6 +690,196 @@ export async function handleResearchIndexBridge(request: Request, env: D1BridgeE
   }
 }
 
+function orchestratorLead(row: Record<string, unknown> | null): JsonObject | null {
+  if (!row) return null;
+  return {
+    ...row,
+    manual_bump: Boolean(row.manual_bump),
+    metadata: JSON.parse(String(row.metadata_json || "{}")),
+  };
+}
+
+function campaignValue(row: Record<string, unknown> | null): JsonObject | null {
+  if (!row) return null;
+  const campaign = JSON.parse(String(row.brief_json || "{}")) as JsonObject;
+  return { ...campaign, status: row.status, updated_at: row.updated_at || campaign.updated_at };
+}
+
+/** Canonical lifecycle, campaign, audit, and artifact repository. */
+export async function handleOrchestratorBridge(request: Request, env: D1BridgeEnv): Promise<Response> {
+  if (request.method !== "POST") return response({ error: "Method not allowed" }, 405);
+  const operation = new URL(request.url).pathname.replace(/^\/v1\/orchestrator\//, "");
+  const input = await body(request);
+  if (!input) return response({ error: "Expected JSON object" }, 400);
+  const obj = (name: string) => (
+    input[name] && typeof input[name] === "object" ? input[name] as JsonObject : null
+  );
+  const now = new Date().toISOString();
+  try {
+    if (operation === "upsert-lead") {
+      const lead = obj("lead");
+      if (!lead || !nonEmptyString(lead.id)) return response({ error: "lead is required" }, 422);
+      await env.AUTOREACH_DB.prepare(
+        `INSERT INTO leads (id,state,email,company,industry,quality_score,company_size_score,
+          industry_fit_score,recency_score,manual_bump,priority,attempts,last_error,retry_after,
+          discovered_at,sent_at,replied_at,state_entered_at,source_job,metadata_json,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+          state=excluded.state,email=excluded.email,company=excluded.company,industry=excluded.industry,
+          quality_score=excluded.quality_score,company_size_score=excluded.company_size_score,
+          industry_fit_score=excluded.industry_fit_score,recency_score=excluded.recency_score,
+          manual_bump=excluded.manual_bump,priority=excluded.priority,attempts=excluded.attempts,
+          last_error=excluded.last_error,retry_after=excluded.retry_after,discovered_at=excluded.discovered_at,
+          sent_at=excluded.sent_at,replied_at=excluded.replied_at,state_entered_at=excluded.state_entered_at,
+          source_job=excluded.source_job,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`,
+      ).bind(lead.id, lead.state || "new", lead.email || "", lead.company || "", lead.industry || "",
+        Number(lead.quality_score || 0), Number(lead.company_size_score || 0),
+        Number(lead.industry_fit_score || 0), Number(lead.recency_score ?? 1),
+        Number(Boolean(lead.manual_bump)), Number(lead.priority || 0), Number(lead.attempts || 0),
+        lead.last_error || "", lead.retry_after || null, lead.discovered_at || null, lead.sent_at || null,
+        lead.replied_at || null, lead.state_entered_at || now, lead.source_job || "",
+        JSON.stringify(lead.metadata || {}), lead.created_at || now, lead.updated_at || now).run();
+      return response({ saved: true });
+    }
+    if (operation === "get-lead") {
+      const lead = await env.AUTOREACH_DB.prepare("SELECT * FROM leads WHERE id = ?")
+        .bind(input.id || "").first<Record<string, unknown>>();
+      return response({ lead: orchestratorLead(lead) });
+    }
+    if (operation === "list-leads") {
+      const state = nonEmptyString(input.state);
+      const rows = await env.AUTOREACH_DB.prepare(
+        state ? "SELECT * FROM leads WHERE state = ?" : "SELECT * FROM leads",
+      ).bind(...(state ? [state] : [])).all<Record<string, unknown>>();
+      return response({ items: rows.results.map(orchestratorLead) });
+    }
+    if (operation === "lead-counts") {
+      const rows = await env.AUTOREACH_DB.prepare("SELECT state, COUNT(*) count FROM leads GROUP BY state")
+        .all<{ state: string; count: number }>();
+      return response({ counts: Object.fromEntries(rows.results.map((item) => [item.state, item.count])) });
+    }
+    if (operation === "log-event") {
+      await env.AUTOREACH_DB.prepare(
+        "INSERT INTO lead_events (lead_id,from_state,to_state,note,at) VALUES (?,?,?,?,?)",
+      ).bind(input.lead_id || "", input.from_state || "", input.to_state || "", input.note || "", now).run();
+      return response({ saved: true });
+    }
+    if (operation === "event-count") {
+      const toState = nonEmptyString(input.to_state);
+      const note = nonEmptyString(input.note);
+      const result = toState
+        ? await env.AUTOREACH_DB.prepare("SELECT COUNT(DISTINCT lead_id) count FROM lead_events WHERE to_state = ?").bind(toState).first<{ count: number }>()
+        : await env.AUTOREACH_DB.prepare("SELECT COUNT(*) count FROM lead_events WHERE note = ?").bind(note || "").first<{ count: number }>();
+      return response({ count: Number(result?.count || 0) });
+    }
+    if (operation === "record-run") {
+      const run = obj("run");
+      if (!run || !nonEmptyString(run.id)) return response({ error: "run is required" }, 422);
+      await env.AUTOREACH_DB.prepare(
+        `INSERT INTO orchestrator_runs (id,stage,agent,processed,succeeded,failed,ok,error,started_at,duration_seconds)
+         VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET processed=excluded.processed,
+         succeeded=excluded.succeeded,failed=excluded.failed,ok=excluded.ok,error=excluded.error,
+         duration_seconds=excluded.duration_seconds`,
+      ).bind(run.id, run.stage || "", run.agent || "", Number(run.processed || 0),
+        Number(run.succeeded || 0), Number(run.failed || 0), Number(Boolean(run.ok)), run.error || "",
+        run.started_at || now, Number(run.duration_seconds || 0)).run();
+      return response({ saved: true });
+    }
+    if (operation === "recent-runs") {
+      const limit = Math.max(1, Math.min(100, Number(input.limit || 10)));
+      const rows = await env.AUTOREACH_DB.prepare(
+        "SELECT * FROM orchestrator_runs WHERE stage = ? ORDER BY started_at DESC LIMIT ?",
+      ).bind(input.stage || "", limit).all<Record<string, unknown>>();
+      return response({ items: rows.results });
+    }
+    if (operation === "dead-letter") {
+      await env.AUTOREACH_DB.prepare(
+        `INSERT INTO dead_letters (lead_id,stage,reason,added_at) VALUES (?,?,?,?)
+         ON CONFLICT(lead_id) DO UPDATE SET stage=excluded.stage,reason=excluded.reason,added_at=excluded.added_at`,
+      ).bind(input.lead_id || "", input.stage || "", input.reason || "", now).run();
+      return response({ saved: true });
+    }
+    if (operation === "dead-letter-count") {
+      const result = await env.AUTOREACH_DB.prepare("SELECT COUNT(*) count FROM dead_letters")
+        .first<{ count: number }>();
+      return response({ count: Number(result?.count || 0) });
+    }
+    if (operation === "list-dead-letter") {
+      const rows = await env.AUTOREACH_DB.prepare("SELECT * FROM dead_letters ORDER BY added_at")
+        .all<Record<string, unknown>>();
+      return response({ items: rows.results });
+    }
+    if (operation === "save-artifact") {
+      const id = nonEmptyString(input.id);
+      const kind = nonEmptyString(input.kind);
+      const payload = obj("payload");
+      if (!id || !kind || !payload) return response({ error: "id, kind, and payload are required" }, 422);
+      const content = new TextEncoder().encode(JSON.stringify(payload));
+      const checksum = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", content)))
+        .map((value) => value.toString(16).padStart(2, "0")).join("");
+      const safeKind = kind.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const safeId = id.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const key = `orchestrator/${safeKind}/${safeId}.json`;
+      await env.AUTOREACH_ARTIFACTS.put(key, content, { httpMetadata: { contentType: "application/json" } });
+      await env.AUTOREACH_DB.prepare(
+        `INSERT INTO agent_artifacts (id,kind,lead_id,source_job_id,r2_key,checksum_sha256,content_type,metadata_json,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,lead_id=excluded.lead_id,
+         source_job_id=excluded.source_job_id,r2_key=excluded.r2_key,checksum_sha256=excluded.checksum_sha256,
+         content_type=excluded.content_type,metadata_json=excluded.metadata_json`,
+      ).bind(id, kind, input.lead_id || null, input.source_job || null, key, checksum,
+        "application/json", "{}", now).run();
+      return response({ saved: true, key, checksum });
+    }
+    if (operation === "save-campaign") {
+      const campaign = obj("campaign");
+      if (!campaign || !nonEmptyString(campaign.id)) return response({ error: "campaign is required" }, 422);
+      const statements = [];
+      if (campaign.status === "active") {
+        statements.push(env.AUTOREACH_DB.prepare("UPDATE campaigns SET status = 'draft' WHERE status = 'active'"));
+      }
+      statements.push(env.AUTOREACH_DB.prepare(
+        `INSERT INTO campaigns (id,user_prompt,brief_json,status,created_at,updated_at) VALUES (?,?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET user_prompt=excluded.user_prompt,brief_json=excluded.brief_json,
+         status=excluded.status,updated_at=excluded.updated_at`,
+      ).bind(campaign.id, campaign.user_prompt || "", JSON.stringify(campaign), campaign.status || "draft",
+        campaign.created_at || now, campaign.updated_at || now));
+      await env.AUTOREACH_DB.batch(statements);
+      return response({ saved: true });
+    }
+    if (operation === "get-campaign" || operation === "active-campaign") {
+      const row = await env.AUTOREACH_DB.prepare(operation === "get-campaign"
+        ? "SELECT brief_json,status,updated_at FROM campaigns WHERE id = ?"
+        : "SELECT brief_json,status,updated_at FROM campaigns WHERE status = 'active' ORDER BY updated_at DESC LIMIT 1")
+        .bind(...(operation === "get-campaign" ? [input.id || ""] : []))
+        .first<Record<string, unknown>>();
+      return response({ campaign: campaignValue(row) });
+    }
+    if (operation === "list-campaigns") {
+      const limit = Math.max(1, Math.min(500, Number(input.limit || 100)));
+      const offset = Math.max(0, Number(input.offset || 0));
+      const rows = await env.AUTOREACH_DB.prepare(
+        "SELECT brief_json,status,updated_at FROM campaigns ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+      ).bind(limit, offset).all<Record<string, unknown>>();
+      return response({ items: rows.results.map(campaignValue) });
+    }
+    if (operation === "activate-campaign") {
+      const id = nonEmptyString(input.id);
+      if (!id) return response({ error: "id is required" }, 422);
+      const existing = await env.AUTOREACH_DB.prepare("SELECT brief_json FROM campaigns WHERE id = ?")
+        .bind(id).first<{ brief_json: string }>();
+      if (!existing) return response({ campaign: null }, 404);
+      await env.AUTOREACH_DB.batch([
+        env.AUTOREACH_DB.prepare("UPDATE campaigns SET status = 'draft' WHERE status = 'active'"),
+        env.AUTOREACH_DB.prepare("UPDATE campaigns SET status = 'active', updated_at = ? WHERE id = ?").bind(now, id),
+      ]);
+      return response({ campaign: { ...JSON.parse(existing.brief_json), status: "active", updated_at: now } });
+    }
+    return response({ error: "Unsupported orchestrator operation" }, 404);
+  } catch (error) {
+    console.error("D1 orchestrator bridge failed", error);
+    return response({ error: "D1 orchestrator operation failed" }, 500);
+  }
+}
+
 /** Durable Agent 4 sender state. This bridge deliberately exposes operations,
  * not SQL, to the Python container. */
 export async function handleSenderBridge(request: Request, env: D1BridgeEnv): Promise<Response> {
@@ -673,12 +909,88 @@ export async function handleSenderBridge(request: Request, env: D1BridgeEnv): Pr
     if (operation === "list-sent") { const status = nonEmptyString(input.status); const rows = await env.AUTOREACH_DB.prepare(status ? "SELECT * FROM sent_emails WHERE status=? ORDER BY created_at" : "SELECT * FROM sent_emails ORDER BY created_at").bind(...(status ? [status] : [])).all<Record<string, unknown>>(); return response({ items: rows.results }); }
     if (operation === "upsert-sequence") {
       const s = obj("sequence"); if (!s || !nonEmptyString(s.lead_id)) return response({ error: "sequence is required" }, 422);
-      await env.AUTOREACH_DB.prepare(`INSERT INTO sequence_states (lead_id,email_id,current_step,status,steps_sent_json,next_send_at_utc,initial_sent_at,recipient,account_email,timezone,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lead_id) DO UPDATE SET email_id=excluded.email_id,current_step=excluded.current_step,status=excluded.status,steps_sent_json=excluded.steps_sent_json,next_send_at_utc=excluded.next_send_at_utc,updated_at=excluded.updated_at`).bind(s.lead_id,s.email_id||"",s.current_step||"",s.status||"active",JSON.stringify(s.steps_sent||[]),s.next_send_at||null,s.initial_sent_at||null,s.recipient||"",s.account_email||"",s.timezone||"UTC",s.created_at||now,s.updated_at||now).run(); return response({ saved:true });
+      await env.AUTOREACH_DB.prepare(`INSERT INTO sequence_states (lead_id,email_id,current_step,status,steps_sent_json,next_send_at_utc,initial_sent_at,recipient,account_email,timezone,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lead_id) DO UPDATE SET email_id=excluded.email_id,current_step=excluded.current_step,status=excluded.status,steps_sent_json=excluded.steps_sent_json,next_send_at_utc=excluded.next_send_at_utc,workflow_instance_id=CASE WHEN sequence_states.current_step=excluded.current_step THEN sequence_states.workflow_instance_id ELSE NULL END,updated_at=excluded.updated_at`).bind(s.lead_id,s.email_id||"",s.current_step||"",s.status||"active",JSON.stringify(s.steps_sent||[]),s.next_send_at||null,s.initial_sent_at||null,s.recipient||"",s.account_email||"",s.timezone||"UTC",s.created_at||now,s.updated_at||now).run(); return response({ saved:true });
+    }
+    if (operation === "schedule-followup") {
+      const s = obj("sequence");
+      if (!s || !nonEmptyString(s.lead_id) || !nonEmptyString(s.current_step) || !nonEmptyString(s.next_send_at)) {
+        return response({ error: "active sequence with next_send_at is required" }, 422);
+      }
+      const jobId = `followup-${s.lead_id}-${s.current_step}`;
+      const createdAt = now;
+      const scheduled = await env.AUTOREACH_DB.prepare(
+        "SELECT workflow_instance_id FROM sequence_states WHERE lead_id=? AND current_step=? AND status='active'",
+      ).bind(s.lead_id, s.current_step).first<{ workflow_instance_id: string | null }>();
+      if (scheduled?.workflow_instance_id) {
+        return response({ job_id: jobId, workflow_instance_id: scheduled.workflow_instance_id, created: false });
+      }
+      await env.AUTOREACH_DB.prepare(
+        `INSERT OR IGNORE INTO jobs (id,kind,status,payload_json,dedupe_key,created_at)
+         VALUES (?,'sender.followup','queued',?,?,?)`,
+      ).bind(jobId, JSON.stringify({
+        lead_id: s.lead_id, expected_step: s.current_step, due_at_utc: s.next_send_at,
+      }), jobId, createdAt).run();
+      let instance;
+      try {
+        instance = await env.AUTOREACH_FOLLOWUPS.create({
+          id: jobId,
+          params: { job_id: jobId, due_at_utc: s.next_send_at },
+        });
+      } catch {
+        // A retry after an ambiguous create reuses the deterministic instance.
+        // Cron independently recovers the due D1 job if the instance did not
+        // actually start.
+        instance = await env.AUTOREACH_FOLLOWUPS.get(jobId);
+      }
+      await env.AUTOREACH_DB.prepare(
+        "UPDATE sequence_states SET workflow_instance_id=?,updated_at=? WHERE lead_id=? AND current_step=? AND status='active'",
+      ).bind(instance.id, now, s.lead_id, s.current_step).run();
+      return response({ job_id: jobId, workflow_instance_id: instance.id, created: true });
     }
     if (operation === "get-sequence" || operation === "active-sequences") { const rows = await env.AUTOREACH_DB.prepare(operation === "get-sequence" ? "SELECT lead_id,email_id,current_step,status,steps_sent_json AS steps_sent,next_send_at_utc AS next_send_at,initial_sent_at,recipient,account_email,timezone,created_at,updated_at FROM sequence_states WHERE lead_id=?" : "SELECT lead_id,email_id,current_step,status,steps_sent_json AS steps_sent,next_send_at_utc AS next_send_at,initial_sent_at,recipient,account_email,timezone,created_at,updated_at FROM sequence_states WHERE status='active'").bind(...(operation === "get-sequence" ? [input.lead_id || ""] : [])).all<Record<string, unknown>>(); const values=rows.results.map((r)=>({...r,steps_sent:JSON.parse(String(r.steps_sent||"[]"))})); return response(operation === "get-sequence" ? { sequence: values[0] || null } : { items: values }); }
     if (operation === "upsert-account") { const a=obj("account"); if (!a || !nonEmptyString(a.email)) return response({error:"account is required"},422); await env.AUTOREACH_DB.prepare("INSERT INTO sending_accounts (email,provider,display_name,daily_limit,hourly_limit,sent_today,sent_this_hour,health_score,status,warmup_start_date) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET provider=excluded.provider,display_name=excluded.display_name,daily_limit=excluded.daily_limit,hourly_limit=excluded.hourly_limit,status=excluded.status").bind(a.email,a.provider||"smtp",a.display_name||"",a.daily_limit||50,a.hourly_limit||10,a.sent_today||0,a.sent_this_hour||0,a.health_score??1,a.status||"active",a.warmup_start_date||null).run(); return response({saved:true}); }
     if (operation === "list-accounts") { const rows=await env.AUTOREACH_DB.prepare("SELECT * FROM sending_accounts").all<Record<string,unknown>>(); return response({items:rows.results}); }
-    if (operation === "insert-event") { const e=obj("event"); if (!e || !nonEmptyString(e.id)) return response({error:"event is required"},422); await env.AUTOREACH_DB.prepare("INSERT OR IGNORE INTO tracking_events (id,sent_email_id,lead_id,event_type,detail,bounce_type,occurred_at,metadata_json) VALUES (?,?,?,?,?,?,?,?)").bind(e.id,e.sent_email_id||"",e.lead_id||"",e.event_type||"",e.detail||"",e.bounce_type||"",e.occurred_at||now,JSON.stringify(e.metadata||{})).run(); return response({saved:true}); }
+    if (operation === "reserve-capacity") {
+      const idempotencyKey = nonEmptyString(input.idempotency_key);
+      const accountEmail = nonEmptyString(input.account_email);
+      const recipientDomain = nonEmptyString(input.recipient_domain);
+      if (!idempotencyKey || !accountEmail || !recipientDomain) {
+        return response({ error: "idempotency_key, account_email, and recipient_domain are required" }, 422);
+      }
+      const existing = await env.AUTOREACH_DB.prepare(
+        "SELECT 1 FROM send_reservations WHERE idempotency_key=?",
+      ).bind(idempotencyKey).first();
+      if (existing) return response({ reserved: true, existing: true });
+      const reservedAt = timestamp(input.reserved_at);
+      const result = await env.AUTOREACH_DB.prepare(
+        `INSERT OR IGNORE INTO send_reservations (idempotency_key,account_email,recipient_domain,reserved_at)
+         SELECT ?,?,?,? FROM sending_accounts a
+         WHERE a.email=? AND a.status='active'
+           AND (SELECT COUNT(*) FROM send_reservations r
+                WHERE r.account_email=a.email AND date(r.reserved_at)=date(?))
+               < MIN(a.daily_limit, ?)
+           AND (SELECT COUNT(*) FROM send_reservations r
+                WHERE r.account_email=a.email AND strftime('%Y-%m-%dT%H',r.reserved_at)=strftime('%Y-%m-%dT%H',?))
+               < MIN(a.hourly_limit, ?)
+           AND (SELECT COUNT(*) FROM send_reservations r
+                WHERE r.account_email=a.email AND unixepoch(r.reserved_at) > unixepoch(?)-60)
+               < ?
+           AND NOT EXISTS (
+             SELECT 1 FROM send_reservations r WHERE r.recipient_domain=?
+               AND unixepoch(r.reserved_at) > unixepoch(?)-?
+           )`,
+      ).bind(idempotencyKey, accountEmail, recipientDomain, reservedAt, accountEmail, reservedAt,
+        Math.max(1, Number(input.daily_limit || 1)), reservedAt,
+        Math.max(1, Number(input.hourly_limit || 1)), reservedAt,
+        Math.max(1, Number(input.burst_per_minute || 1)), recipientDomain, reservedAt,
+        Math.max(0, Number(input.domain_spacing_seconds || 0))).run();
+      if (result.meta.changes) return response({ reserved: true, existing: false });
+      const raced = await env.AUTOREACH_DB.prepare(
+        "SELECT 1 FROM send_reservations WHERE idempotency_key=?",
+      ).bind(idempotencyKey).first();
+      return response({ reserved: Boolean(raced), existing: Boolean(raced) });
+    }
+    if (operation === "insert-event") { const e=obj("event"); if (!e || !nonEmptyString(e.id)) return response({error:"event is required"},422); const metadata = e.metadata && typeof e.metadata === "object" ? e.metadata as JsonObject : {}; await env.AUTOREACH_DB.prepare("INSERT OR IGNORE INTO tracking_events (id,sent_email_id,lead_id,event_type,detail,bounce_type,provider_event_id,occurred_at,metadata_json) VALUES (?,?,?,?,?,?,?,?,?)").bind(e.id,e.sent_email_id||"",e.lead_id||"",e.event_type||"",e.detail||"",e.bounce_type||"",e.provider_event_id||metadata.provider_event_id||null,e.occurred_at||now,JSON.stringify(metadata)).run(); return response({saved:true}); }
     if (operation === "get-events") { const rows=await env.AUTOREACH_DB.prepare("SELECT id,sent_email_id,lead_id,event_type,detail,bounce_type,occurred_at,metadata_json AS metadata FROM tracking_events WHERE sent_email_id=? ORDER BY occurred_at").bind(input.sent_email_id||"").all<Record<string,unknown>>(); return response({items:rows.results.map((r)=>({...r,metadata:JSON.parse(String(r.metadata||"{}"))}))}); }
     if (operation === "event-counts") { const rows=await env.AUTOREACH_DB.prepare("SELECT event_type, COUNT(*) count FROM tracking_events GROUP BY event_type").all<{event_type:string;count:number}>(); return response({counts:Object.fromEntries(rows.results.map((r)=>[r.event_type,r.count]))}); }
     if (operation === "upsert-suppression") { const e=obj("entry"); if (!e || !nonEmptyString(e.value)) return response({error:"entry is required"},422); await env.AUTOREACH_DB.prepare("INSERT INTO suppression_list (value,is_domain,reason,detail,added_at) VALUES (?,?,?,?,?) ON CONFLICT(value) DO UPDATE SET is_domain=excluded.is_domain,reason=excluded.reason,detail=excluded.detail").bind(String(e.value).toLowerCase(),Number(Boolean(e.is_domain)),e.reason||"",e.detail||"",e.added_at||now).run(); return response({saved:true}); }

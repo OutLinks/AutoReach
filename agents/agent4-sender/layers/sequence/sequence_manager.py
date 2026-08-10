@@ -61,6 +61,7 @@ class SequenceLayer:
             timezone=timezone_name,
         )
         self._store.upsert_sequence(state)
+        self._schedule_durable(state)
         logger.info(
             "SequenceLayer: started sequence for lead %s (next=%s @ %s)",
             lead_id, first_followup, state.next_send_at,
@@ -94,6 +95,7 @@ class SequenceLayer:
             base = state.initial_sent_at or sent_at
             state.next_send_at = self._due_at(base, following)
         self._store.upsert_sequence(state)
+        self._schedule_durable(state)
         return state
 
     # ── Terminal transitions ───────────────────────────────────────────────────
@@ -128,3 +130,9 @@ class SequenceLayer:
         if base.tzinfo is None:
             base = base.replace(tzinfo=timezone.utc)
         return base + timedelta(days=steps.offset_days(step))
+
+    def _schedule_durable(self, state: SequenceState) -> None:
+        """Register the next multi-day sleep when the production store supports it."""
+        schedule = getattr(self._store, "schedule_followup", None)
+        if state.is_active and state.next_send_at is not None and callable(schedule):
+            schedule(state)
